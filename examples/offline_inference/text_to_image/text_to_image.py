@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import argparse
+import time
 from pathlib import Path
 
 import torch
@@ -58,6 +59,7 @@ def main():
         vae_use_slicing=vae_use_slicing,
         vae_use_tiling=vae_use_tiling,
     )
+    start_time = time.time()
     images = omni.generate(
         args.prompt,
         height=args.height,
@@ -67,6 +69,8 @@ def main():
         num_inference_steps=args.num_inference_steps,
         num_outputs_per_prompt=args.num_images_per_prompt,
     )
+    end_time = time.time()
+    elapsed_time = end_time - start_time
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,6 +84,9 @@ def main():
             save_path = output_path.parent / f"{stem}_{idx}{suffix}"
             img.save(save_path)
             print(f"Saved generated image to {save_path}")
+    print(
+        f"inference time: {elapsed_time:.2f} sec, average time per image: {elapsed_time / args.num_images_per_prompt:.2f} sec"
+    )
 
 
 if __name__ == "__main__":
