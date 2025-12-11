@@ -7,6 +7,7 @@ from pathlib import Path
 
 import torch
 
+from vllm_omni.diffusion.data import DiffusionParallelConfig, OmniDiffusionConfig
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.utils.platform_utils import detect_device_type, is_npu
 
@@ -42,6 +43,18 @@ def parse_args() -> argparse.Namespace:
         default=50,
         help="Number of denoising steps for the diffusion sampler.",
     )
+    parser.add_argument(
+        "--ulysses_degree",
+        type=int,
+        default=2,
+        help="Number of GPUs used for ulysses sequence parallelism.",
+    )
+    parser.add_argument(
+        "--ring_degree",
+        type=int,
+        default=1,
+        help="Number of GPUs used for ring sequence parallelism.",
+    )
     return parser.parse_args()
 
 
@@ -54,11 +67,24 @@ def main():
     vae_use_slicing = is_npu()
     vae_use_tiling = is_npu()
 
-    omni = Omni(
-        model=args.model,
-        vae_use_slicing=vae_use_slicing,
-        vae_use_tiling=vae_use_tiling,
+    assert args.ring_degree == 1, "Ring attention is not supported yet"
+
+    config_kwargs = {
+        "model": args.model,
+        "vae_use_slicing": vae_use_slicing,
+        "vae_use_tiling": vae_use_tiling,
+    }
+
+    omni_diffusion_config = OmniDiffusionConfig(
+        **config_kwargs,
+        parallel_config=DiffusionParallelConfig(ulysses_degree=args.ulysses_degree, ring_degree=args.ring_degree),
     )
+
+    omni = Omni(
+        **config_kwargs,
+        od_config=omni_diffusion_config,
+    )
+
     start_time = time.time()
     images = omni.generate(
         args.prompt,
