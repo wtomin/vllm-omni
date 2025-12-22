@@ -437,7 +437,11 @@ class ZImageTransformer2DModel(nn.Module):
             self.parallel_config = get_current_omni_diffusion_config().parallel_config
         except Exception:
             self.parallel_config = None
-
+        
+        if self.parallel_config is not None and self.parallel_config.sequence_parallel_size > 1:
+            if self.parallel_config.ulysses_degree > 1:
+                assert n_heads % self.parallel_config.ulysses_degree == 0, "n_heads must be divisible by ulysses_degree, n_heads: %d, ulysses_degree: %d" % (n_heads, self.parallel_config.ulysses_degree)
+                assert n_kv_heads % self.parallel_config.ulysses_degree == 0, "n_kv_heads must be divisible by ulysses_degree, n_kv_heads: %d, ulysses_degree: %d" % (n_kv_heads, self.parallel_config.ulysses_degree)
     def unpatchify(self, x: list[torch.Tensor], size: list[tuple], patch_size, f_patch_size) -> list[torch.Tensor]:
         pH = pW = patch_size
         pF = f_patch_size
@@ -659,7 +663,7 @@ class ZImageTransformer2DModel(nn.Module):
             "sequence length: %d, sp_world_size: %d" % (unified.size(1), sp_world_size)
    
             unified = torch.chunk(unified, sp_world_size, dim=1)[sp_rank]
-            unified_freqs_cis = torch.chunk(unified_freqs_cis, sp_world_size, dim=0)[sp_rank]
+            unified_freqs_cis = torch.chunk(unified_freqs_cis, sp_world_size, dim=1)[sp_rank]
 
             get_forward_context().split_text_embed_in_sp = True
 
