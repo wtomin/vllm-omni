@@ -15,7 +15,7 @@ The following table shows which models are currently supported by parallelism me
 | Model | Model Identifier |  Ulysses-SP |
 |-------|-----------------|-----------|
 | **Qwen-Image** | `Qwen/Qwen-Image` |  ✅ |
-| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ❌ |
+| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ |
 | **Qwen-Image-Edit** | `Qwen/Qwen-Image-Edit` | ✅ |
 
 ### Sequence Parallelism

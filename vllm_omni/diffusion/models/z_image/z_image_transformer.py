@@ -31,8 +31,15 @@ from vllm.model_executor.layers.linear import (
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.data import get_current_omni_diffusion_config
+from vllm_omni.diffusion.distributed.parallel_state import (
+    get_sequence_parallel_rank,
+    get_sequence_parallel_world_size,
+    get_sp_group,
+)
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 
+from vllm_omni.diffusion.forward_context import get_forward_context
 ADALN_EMBED_DIM = 256
 SEQ_MULTI_OF = 32
 
@@ -425,6 +432,12 @@ class ZImageTransformer2DModel(nn.Module):
 
         self.rope_embedder = RopeEmbedder(theta=rope_theta, axes_dims=axes_dims, axes_lens=axes_lens)
 
+
+        try:
+            self.parallel_config = get_current_omni_diffusion_config().parallel_config
+        except Exception:
+            self.parallel_config = None
+
     def unpatchify(self, x: list[torch.Tensor], size: list[tuple], patch_size, f_patch_size) -> list[torch.Tensor]:
         pH = pW = patch_size
         pF = f_patch_size
@@ -637,10 +650,25 @@ class ZImageTransformer2DModel(nn.Module):
         for i, seq_len in enumerate(unified_item_seqlens):
             unified_attn_mask[i, :seq_len] = 1
 
+        sp_enabled = self.parallel_config is not None and self.parallel_config.sequence_parallel_size > 1
+        if sp_enabled:
+            sp_world_size = get_sequence_parallel_world_size()
+            sp_rank = get_sequence_parallel_rank()
+            # Assume sequence length is divisible by SP size
+            assert unified.size(1) % sp_world_size == 0, "Sequence length is not divisible by SP size, " \
+            "sequence length: %d, sp_world_size: %d" % (unified.size(1), sp_world_size)
+   
+            unified = torch.chunk(unified, sp_world_size, dim=1)[sp_rank]
+            unified_freqs_cis = torch.chunk(unified_freqs_cis, sp_world_size, dim=0)[sp_rank]
+
+            get_forward_context().split_text_embed_in_sp = True
+
         for layer in self.layers:
             unified = layer(unified, unified_attn_mask, unified_freqs_cis, adaln_input)
 
         unified = self.all_final_layer[f"{patch_size}-{f_patch_size}"](unified, adaln_input)
+        if sp_enabled:
+            unified = get_sp_group().all_gather(unified, dim=1)
         unified = list(unified.unbind(dim=0))
         x = self.unpatchify(unified, x_size, patch_size, f_patch_size)
 
