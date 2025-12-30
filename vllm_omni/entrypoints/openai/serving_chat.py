@@ -71,6 +71,8 @@ from vllm.tokenizers.mistral import (
 from vllm.utils.collection_utils import as_list
 
 from vllm_omni.entrypoints.chat_utils import parse_chat_messages_futures
+from vllm_omni.entrypoints.openai.audio_utils_mixin import AudioMixin
+from vllm_omni.entrypoints.openai.protocol.audio import AudioResponse, CreateAudio
 from vllm_omni.outputs import OmniRequestOutput
 
 if TYPE_CHECKING:
@@ -79,7 +81,7 @@ if TYPE_CHECKING:
 logger = init_logger(__name__)
 
 
-class OmniOpenAIServingChat(OpenAIServingChat):
+class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
     """OpenAI-compatible chat serving for both LLM and Diffusion models.
 
     This class extends OpenAIServingChat to support:
@@ -860,26 +862,21 @@ class OmniOpenAIServingChat(OpenAIServingChat):
         final_res = omni_outputs.request_output
         audio_tensor = final_res.multimodal_output["audio"].float().detach().cpu().numpy()
 
-        # Convert numpy array to WAV bytes and encode as base64
-        if soundfile is None:
-            raise ImportError(
-                "soundfile is required for audio generation. Please install it with: pip install soundfile"
-            )
-
-        # Default sample rate for TTS models (typically 24000 Hz)
-        # You may need to adjust this based on your model's configuration
-        sample_rate = 24000
-
         # Ensure audio is 1D (flatten if needed)
         if audio_tensor.ndim > 1:
             audio_tensor = audio_tensor.flatten()
 
-        # Convert to WAV format and encode as base64
-        with BytesIO() as buffer:
-            soundfile.write(buffer, audio_tensor, sample_rate, format="WAV")
-            wav_bytes = buffer.getvalue()
+        audio_obj = CreateAudio(
+            audio_tensor=audio_tensor,
+            sample_rate=24000,
+            response_format="wav",
+            speed=1.0,
+            stream_format="audio",
+            base64_encode=True,
+        )
 
-        audio_base64 = base64.b64encode(wav_bytes).decode("utf-8")
+        audio_response: AudioResponse = self.create_audio(audio_obj)
+        audio_base64 = audio_response.audio_data
 
         # Generate unique ID for the audio
         audio_id = f"audio-{uuid.uuid4().hex[:16]}"
@@ -1065,7 +1062,7 @@ class OmniOpenAIServingChat(OpenAIServingChat):
             # Get request parameters from extra_body
             # Text-to-image parameters (ref: text_to_image.py)
             num_inference_steps = extra_body.get("num_inference_steps", 50)
-            guidance_scale = extra_body.get("guidance_scale", 7.5)
+            guidance_scale = extra_body.get("guidance_scale")
             true_cfg_scale = extra_body.get("true_cfg_scale")  # Qwen-Image specific
             seed = extra_body.get("seed")
             negative_prompt = extra_body.get("negative_prompt")
@@ -1097,13 +1094,15 @@ class OmniOpenAIServingChat(OpenAIServingChat):
                 "prompt": prompt,
                 "request_id": request_id,
                 "num_inference_steps": num_inference_steps,
-                "guidance_scale": guidance_scale,
                 "height": height,
                 "width": width,
                 "negative_prompt": negative_prompt,
                 "num_outputs_per_prompt": num_outputs_per_prompt,
                 "seed": seed,
             }
+
+            if guidance_scale is not None:
+                gen_kwargs["guidance_scale"] = guidance_scale
 
             # Add Qwen-Image specific parameter
             if true_cfg_scale is not None:
