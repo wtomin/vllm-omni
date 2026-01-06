@@ -130,7 +130,9 @@ def main():
         }
 
     # assert args.ring_degree == 1, "Ring attention is not supported yet"
-    parallel_config = DiffusionParallelConfig(ulysses_degree=args.ulysses_degree, ring_degree=args.ring_degree, cfg_parallel_size=args.cfg_parallel_size)
+    parallel_config = DiffusionParallelConfig(
+        ulysses_degree=args.ulysses_degree, ring_degree=args.ring_degree, cfg_parallel_size=args.cfg_parallel_size
+    )
 
     omni = Omni(
         model=args.model,
@@ -147,7 +149,9 @@ def main():
     print(f"  Model: {args.model}")
     print(f"  Inference steps: {args.num_inference_steps}")
     print(f"  Cache backend: {args.cache_backend if args.cache_backend else 'None (no acceleration)'}")
-    print(f"  Parallel configuration: ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}")
+    print(
+        f"  Parallel configuration: ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}"
+    )
     print(f"  Image size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")
 
