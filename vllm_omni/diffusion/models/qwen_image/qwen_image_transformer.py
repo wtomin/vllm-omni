@@ -469,7 +469,7 @@ class QwenImageCrossAttention(nn.Module):
                 joint_mask = (
                     None if len(mask_list) == 0 else torch.cat(mask_list, dim=1) if len(mask_list) > 1 else mask_list[0]
                 )
-                attn_metadata.attn_mask = joint_mask
+                attn_metadata = AttentionMetadata(attn_mask=joint_mask)
             joint_hidden_states = self.attn(
                 joint_query,
                 joint_key,
