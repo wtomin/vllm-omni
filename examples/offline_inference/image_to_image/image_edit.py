@@ -287,7 +287,9 @@ def main():
     # Enable VAE memory optimizations on NPU
     vae_use_slicing = is_npu()
     vae_use_tiling = is_npu()
-    parallel_config = DiffusionParallelConfig(ulysses_degree=args.ulysses_degree, ring_degree=args.ring_degree, cfg_parallel_size=args.cfg_parallel_size)
+    parallel_config = DiffusionParallelConfig(
+        ulysses_degree=args.ulysses_degree, ring_degree=args.ring_degree, cfg_parallel_size=args.cfg_parallel_size
+    )
 
     # Configure cache based on backend type
     cache_config = None
@@ -334,7 +336,9 @@ def main():
             print(f"    Image {idx + 1} size: {img.size}")
     else:
         print(f"  Input image size: {input_image.size}")
-    print(f"  Parallel configuration: ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}")
+    print(
+        f"  Parallel configuration: ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}"
+    )
     print(f"{'=' * 60}\n")
 
     generation_start = time.perf_counter()
