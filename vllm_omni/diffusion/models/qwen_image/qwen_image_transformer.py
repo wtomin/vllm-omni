@@ -796,11 +796,6 @@ class QwenImageTransformer2DModel(CachedTransformer):
                 )
                 hidden_states = torch.cat([hidden_states, padding_tensor], dim=1)
 
-            hidden_states_mask = (
-                torch.chunk(hidden_states_mask, sp_size, dim=-1)[get_sequence_parallel_rank()]
-                if hidden_states_mask is not None
-                else None
-            )
             hidden_states = torch.chunk(hidden_states, sp_size, dim=-2)[get_sequence_parallel_rank()]
             # NOTE:
             # QwenImage uses *dual-stream* (text + image) and runs a *joint attention*.

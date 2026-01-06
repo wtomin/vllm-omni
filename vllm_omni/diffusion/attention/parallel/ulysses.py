@@ -12,7 +12,6 @@ from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.parallel.base import ParallelAttentionContext
 from vllm_omni.diffusion.distributed.comm import SeqAllToAll4D
 from vllm_omni.diffusion.distributed.group_coordinator import SequenceParallelGroupCoordinator
-from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,12 +165,6 @@ class UlyssesParallelAttention:
         )
 
         if attn_metadata is not None:
-            # get the attn_mask (gathered)
-            if attn_metadata.attn_mask is not None:
-                attn_metadata.attn_mask = get_sp_group().all_gather(
-                    attn_metadata.attn_mask, dim=1
-                )  # attn_mask shape (B, S/P) -> (B, S)
-
             if is_joint:
                 if attn_metadata.joint_attn_mask is None and attn_metadata.attn_mask is None:
                     attn_metadata.attn_mask = None
