@@ -199,7 +199,7 @@ class UlyssesParallelAttention:
                 assert attn_metadata.attn_mask.shape[1] == query.shape[1], (
                     f"attn_mask length: {attn_metadata.attn_mask.shape[1]} != query length: {query.shape[1]}"
                 )
-                attn_metadata.attn_mask = attn_metadata.attn_mask.unsqueeze(1).unsqueeze(2)
+                attn_metadata.attn_mask = attn_metadata.attn_mask.bool().contiguous()
         return query, key, value, attn_metadata, ctx
 
     def post_attention(self, attn_output: torch.Tensor, ctx: ParallelAttentionContext | None) -> torch.Tensor:
