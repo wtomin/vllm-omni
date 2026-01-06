@@ -69,28 +69,12 @@ class UlyssesParallelAttention:
         joint_tensor_query = joint_tensor_key = joint_tensor_value = None
         joint_strategy = "front"
         joint_len = 0
-        attn_mask = attn_metadata.attn_mask
-
-        if attn_mask is not None:
-            attn_metadata.attn_mask = get_sp_group().all_gather(attn_mask, dim=1)  # attn_mask shape (B, S/P) -> (B, S)
 
         if attn_metadata is not None:
             joint_tensor_query = attn_metadata.joint_query
             joint_tensor_key = attn_metadata.joint_key
             joint_tensor_value = attn_metadata.joint_value
             joint_strategy = attn_metadata.joint_strategy
-            joint_attn_mask = attn_metadata.joint_attn_mask
-
-            if joint_attn_mask is not None:
-                # joint_attn_mask is not split along sequence dimension
-                if attn_metadata.attn_mask is None:
-                    attn_mask = torch.ones([query.shape[0], query.shape[1]], dtype=torch.bool, device=query.device)
-
-                attn_metadata.attn_mask = (
-                    torch.cat([joint_attn_mask, attn_mask], dim=1)
-                    if joint_strategy == "front"
-                    else torch.cat([attn_mask, joint_attn_mask], dim=1)
-                )
 
         is_joint = False
         if joint_tensor_query is not None and joint_tensor_key is not None and joint_tensor_value is not None:
@@ -181,14 +165,41 @@ class UlyssesParallelAttention:
             joint_strategy=joint_strategy,
         )
 
-        if attn_metadata.attn_mask is not None:
-            attn_mask = attn_metadata.attn_mask
-            assert attn_mask.shape[1] == query.shape[1], (
-                f"attn_mask length: {attn_mask.shape[1]} != query length: {query.shape[1]}"
-            )
-            # turn attn_mask (B, S) -> (B, 1, 1, S)
-            attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)
-            attn_metadata.attn_mask = attn_mask
+        if attn_metadata is not None:
+            # get the attn_mask (gathered)
+            if attn_metadata.attn_mask is not None:
+                attn_metadata.attn_mask = get_sp_group().all_gather(
+                    attn_metadata.attn_mask, dim=1
+                )  # attn_mask shape (B, S/P) -> (B, S)
+
+            if is_joint:
+                if attn_metadata.joint_attn_mask is None and attn_metadata.attn_mask is None:
+                    attn_metadata.attn_mask = None
+                else:
+                    if attn_metadata.attn_mask is None:
+                        attn_metadata.attn_mask = torch.ones(
+                            [query.shape[0], query.shape[1] - attn_metadata.joint_attn_mask.shape[1]],
+                            dtype=torch.bool,
+                            device=query.device,
+                        )
+                    elif attn_metadata.joint_attn_mask is None:
+                        attn_metadata.joint_attn_mask = torch.ones(
+                            [query.shape[0], query.shape[1] - attn_metadata.attn_mask.shape[1]],
+                            dtype=torch.bool,
+                            device=query.device,
+                        )
+                    attn_metadata.attn_mask = (
+                        torch.cat([attn_metadata.joint_attn_mask, attn_metadata.attn_mask], dim=1)
+                        if joint_strategy == "front"
+                        else torch.cat([attn_metadata.attn_mask, attn_metadata.joint_attn_mask], dim=1)
+                    )
+
+            if attn_metadata.attn_mask is not None:
+                # the final attn_mask is ready, the length should be aligedn with query length
+                assert attn_metadata.attn_mask.shape[1] == query.shape[1], (
+                    f"attn_mask length: {attn_metadata.attn_mask.shape[1]} != query length: {query.shape[1]}"
+                )
+                attn_metadata.attn_mask = attn_metadata.attn_mask.unsqueeze(1).unsqueeze(2)
         return query, key, value, attn_metadata, ctx
 
     def post_attention(self, attn_output: torch.Tensor, ctx: ParallelAttentionContext | None) -> torch.Tensor:
