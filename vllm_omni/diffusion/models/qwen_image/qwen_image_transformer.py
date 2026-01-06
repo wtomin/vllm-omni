@@ -23,6 +23,7 @@ from vllm_omni.diffusion.attention.backends.abstract import (
     AttentionMetadata,
 )
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.attention.selector import get_attn_backend
 from vllm_omni.diffusion.cache.base import CachedTransformer
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.parallel_state import (
@@ -784,6 +785,15 @@ class QwenImageTransformer2DModel(CachedTransformer):
             sp_size = get_sequence_parallel_world_size()
 
             if seq_len % sp_size != 0:
+                #  flash_attn, ring_attn, sage_attn do not support attention_mask
+                if get_attn_backend(-1).get_name() != "SDPA" or get_attn_backend(-1).get_name() != "ASCEND":
+                    raise ValueError(
+                        f"{get_attn_backend(-1).get_name()} does not support attention_mask, "
+                        f"and the input shape is not divisible by sp_size={sp_size}."
+                        " Please switch to SDPA or Ascend attention backend or "
+                        f"use a different image shape that the sequence length is divisible by sp_size={sp_size}."
+                    )
+
                 seq_padding = sp_size - (seq_len % sp_size)
                 original_seq_len = seq_len
 
