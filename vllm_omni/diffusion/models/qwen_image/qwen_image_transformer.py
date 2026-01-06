@@ -27,6 +27,7 @@ from vllm_omni.diffusion.attention.selector import get_attn_backend
 from vllm_omni.diffusion.cache.base import CachedTransformer
 from vllm_omni.diffusion.data import OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.parallel_state import (
+    get_ring_parallel_world_size,
     get_sequence_parallel_rank,
     get_sequence_parallel_world_size,
     get_sp_group,
@@ -788,9 +789,16 @@ class QwenImageTransformer2DModel(CachedTransformer):
                 #  flash_attn, ring_attn, sage_attn do not support attention_mask
                 if get_attn_backend(-1).get_name() != "SDPA" and get_attn_backend(-1).get_name() != "ASCEND":
                     raise ValueError(
-                        f"When generating image shape that the sequence length is divisible by sp_size={sp_size},"
+                        f"When generating image shape that the sequence length is NOT divisible by sp_size={sp_size},"
                         f"cannot use {get_attn_backend(-1).get_name()} which does not support attention_mask."
                         f"Please switch to SDPA or Ascend attention backend."
+                    )
+                # ring attention does not support attention_mask
+                if get_ring_parallel_world_size() > 1:
+                    raise ValueError(
+                        f"When generating image shape that the sequence length is NOT divisible by sp_size={sp_size},"
+                        f"cannot use ring attention which does not support attention_mask."
+                        f"Please switch to Ulysses SP only."
                     )
 
                 seq_padding = sp_size - (seq_len % sp_size)
