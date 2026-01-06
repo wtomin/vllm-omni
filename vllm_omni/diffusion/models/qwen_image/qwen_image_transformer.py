@@ -786,12 +786,11 @@ class QwenImageTransformer2DModel(CachedTransformer):
 
             if seq_len % sp_size != 0:
                 #  flash_attn, ring_attn, sage_attn do not support attention_mask
-                if get_attn_backend(-1).get_name() != "SDPA" or get_attn_backend(-1).get_name() != "ASCEND":
+                if get_attn_backend(-1).get_name() != "SDPA" and get_attn_backend(-1).get_name() != "ASCEND":
                     raise ValueError(
-                        f"{get_attn_backend(-1).get_name()} does not support attention_mask, "
-                        f"and the input shape is not divisible by sp_size={sp_size}."
-                        " Please switch to SDPA or Ascend attention backend or "
-                        f"use a different image shape that the sequence length is divisible by sp_size={sp_size}."
+                        f"When generating image shape that the sequence length is divisible by sp_size={sp_size},"
+                        f"cannot use {get_attn_backend(-1).get_name()} which does not support attention_mask."
+                        f"Please switch to SDPA or Ascend attention backend."
                     )
 
                 seq_padding = sp_size - (seq_len % sp_size)
