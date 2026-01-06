@@ -12,6 +12,7 @@ from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.parallel.base import ParallelAttentionContext
 from vllm_omni.diffusion.distributed.comm import SeqAllToAll4D
 from vllm_omni.diffusion.distributed.group_coordinator import SequenceParallelGroupCoordinator
+from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,12 +69,28 @@ class UlyssesParallelAttention:
         joint_tensor_query = joint_tensor_key = joint_tensor_value = None
         joint_strategy = "front"
         joint_len = 0
+        attn_mask = attn_metadata.attn_mask
+
+        if attn_mask is not None:
+            attn_metadata.attn_mask = get_sp_group().all_gather(attn_mask, dim=1)  # attn_mask shape (B, S/P) -> (B, S)
 
         if attn_metadata is not None:
             joint_tensor_query = attn_metadata.joint_query
             joint_tensor_key = attn_metadata.joint_key
             joint_tensor_value = attn_metadata.joint_value
             joint_strategy = attn_metadata.joint_strategy
+            joint_attn_mask = attn_metadata.joint_attn_mask
+
+            if joint_attn_mask is not None:
+                # joint_attn_mask is not split along sequence dimension
+                if attn_metadata.attn_mask is None:
+                    attn_mask = torch.ones([query.shape[0], query.shape[1]], dtype=torch.bool, device=query.device)
+
+                attn_metadata.attn_mask = (
+                    torch.cat([joint_attn_mask, attn_mask], dim=1)
+                    if joint_strategy == "front"
+                    else torch.cat([attn_mask, joint_attn_mask], dim=1)
+                )
 
         is_joint = False
         if joint_tensor_query is not None and joint_tensor_key is not None and joint_tensor_value is not None:
@@ -163,6 +180,15 @@ class UlyssesParallelAttention:
             joint_len=joint_len,
             joint_strategy=joint_strategy,
         )
+
+        if attn_metadata.attn_mask is not None:
+            attn_mask = attn_metadata.attn_mask
+            assert attn_mask.shape[1] == query.shape[1], (
+                f"attn_mask length: {attn_mask.shape[1]} != query length: {query.shape[1]}"
+            )
+            # turn attn_mask (B, S) -> (B, 1, 1, S)
+            attn_mask = attn_mask.unsqueeze(1).unsqueeze(2)
+            attn_metadata.attn_mask = attn_mask
         return query, key, value, attn_metadata, ctx
 
     def post_attention(self, attn_output: torch.Tensor, ctx: ParallelAttentionContext | None) -> torch.Tensor:
