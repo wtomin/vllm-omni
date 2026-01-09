@@ -154,6 +154,15 @@ class OmniServeCommand(CLISubcommand):
             help="Ring Sequence Parallelism degree for diffusion models. "
             "Equivalent to setting DiffusionParallelConfig.ring_degree.",
         )
+        serve_parser.add_argument(
+            "--cfg-parallel-size",
+            dest="cfg_parallel_size",
+            type=int,
+            default=None,
+            choices=[1, 2],
+            help="Classifier-Free Guidance parallel size for diffusion models (CFG-Parallel). "
+            "Recommended: 2 (one rank for positive branch, one for negative).",
+        )
 
         # Cache optimization parameters
         serve_parser.add_argument(
