@@ -17,7 +17,7 @@ from vllm_omni.diffusion.attention.backends.flash_attn import FlashAttentionImpl
 from vllm_omni.diffusion.attention.backends.sdpa import SDPAImpl
 
 
-def create_attention_mask(batch_size: int, seq_len: int, valid_len: int) -> torch.Tensor:
+def create_attention_mask(batch_size: int, seq_len: int, valid_len: int, device: torch.device) -> torch.Tensor:
     """
     Create attention mask where first valid_len tokens are valid (1) and rest are padding (0).
 
@@ -29,7 +29,7 @@ def create_attention_mask(batch_size: int, seq_len: int, valid_len: int) -> torc
     Returns:
         Attention mask of shape (batch_size, seq_len)
     """
-    mask = torch.zeros(batch_size, seq_len, dtype=torch.bool)
+    mask = torch.zeros(batch_size, seq_len, dtype=torch.bool, device=device)
     mask[:, :valid_len] = True
     return mask
 
@@ -111,8 +111,8 @@ def test_case1_padding_equivalence():
     # Create attention mask
     attn_mask_b = torch.cat(
         [
-            create_attention_mask(batch_size, hidden_seq_len + pad_length, hidden_seq_len),
-            create_attention_mask(batch_size, encoder_seq_len + pad_length, encoder_seq_len),
+            create_attention_mask(batch_size, hidden_seq_len + pad_length, hidden_seq_len, device),
+            create_attention_mask(batch_size, encoder_seq_len + pad_length, encoder_seq_len, device),
         ],
         dim=1,
     )
@@ -199,8 +199,8 @@ def test_case2_fa_vs_sdpa():
     # Create attention mask
     attn_mask = torch.cat(
         [
-            create_attention_mask(batch_size, hidden_seq_len + pad_length, hidden_seq_len),
-            create_attention_mask(batch_size, encoder_seq_len + pad_length, encoder_seq_len),
+            create_attention_mask(batch_size, hidden_seq_len + pad_length, hidden_seq_len, device),
+            create_attention_mask(batch_size, encoder_seq_len + pad_length, encoder_seq_len, device),
         ],
         dim=1,
     )
