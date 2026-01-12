@@ -246,26 +246,17 @@ def test_fa_vs_sdpa():
     max_diff = torch.max(torch.abs(output_fa_valid - output_sdpa_valid)).item()
     mean_diff = torch.mean(torch.abs(output_fa_valid - output_sdpa_valid)).item()
 
-    # relative difference
-    relative_diff = torch.abs(output_fa_valid - output_sdpa_valid) / (torch.abs(output_fa_valid) + 1e-8)
-    max_relative_diff = relative_diff.max().item()
-    mean_relative_diff = relative_diff.mean().item()
-
     print("\n=== Case 2: FA vs SDPA Comparison ===")
     print(f"Batch size: {batch_size}")
     print(f"FA output shape: {output_fa.shape}")
     print(f"SDPA output shape: {output_sdpa.shape}")
     print(f"Max absolute difference (valid region): {max_diff:.6f}")
     print(f"Mean absolute difference (valid region): {mean_diff:.6f}")
-    print(f"Max relative difference (valid region): {max_relative_diff:.6f}")
-    print(f"Mean relative difference (valid region): {mean_relative_diff:.6f}")
 
     # Assert that outputs are close
     # Using higher tolerance for bfloat16 and different implementations
-    assert max_diff < 0.15, f"Max difference {max_diff} exceeds threshold 0.15"
-    assert mean_diff < 0.02, f"Mean difference {mean_diff} exceeds threshold 0.02"
-    assert max_relative_diff < 0.001, f"Max relative difference {max_relative_diff} exceeds threshold 0.001"
-    assert mean_relative_diff < 0.001, f"Mean relative difference {mean_relative_diff} exceeds threshold 0.001"
+    assert max_diff < 0.01, f"Max difference {max_diff} exceeds threshold 0.01"
+    assert mean_diff < 0.001, f"Mean difference {mean_diff} exceeds threshold 0.001"
 
     print("✓ Case 2 PASSED: FA and SDPA outputs are very close!")
 
