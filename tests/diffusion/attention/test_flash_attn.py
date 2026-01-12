@@ -57,7 +57,7 @@ def pad_tensor(tensor: torch.Tensor, target_seq_len: int, pad_value: float = 0.0
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="FlashAttention requires CUDA")
-def test_case1_padding_equivalence():
+def test_padding_equivalence():
     """
     Case 1: Test that padded and unpadded inputs produce similar outputs.
 
@@ -150,7 +150,7 @@ def test_case1_padding_equivalence():
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="FlashAttention requires CUDA")
-def test_case2_fa_vs_sdpa():
+def test_fa_vs_sdpa():
     """
     Case 2: Compare FlashAttention and SDPA backends with padding.
 
@@ -246,17 +246,26 @@ def test_case2_fa_vs_sdpa():
     max_diff = torch.max(torch.abs(output_fa_valid - output_sdpa_valid)).item()
     mean_diff = torch.mean(torch.abs(output_fa_valid - output_sdpa_valid)).item()
 
+    # relative difference
+    relative_diff = torch.abs(output_fa_valid - output_sdpa_valid) / (torch.abs(output_fa_valid) + 1e-8)
+    max_relative_diff = relative_diff.max().item()
+    mean_relative_diff = relative_diff.mean().item()
+
     print("\n=== Case 2: FA vs SDPA Comparison ===")
     print(f"Batch size: {batch_size}")
     print(f"FA output shape: {output_fa.shape}")
     print(f"SDPA output shape: {output_sdpa.shape}")
     print(f"Max absolute difference (valid region): {max_diff:.6f}")
     print(f"Mean absolute difference (valid region): {mean_diff:.6f}")
+    print(f"Max relative difference (valid region): {max_relative_diff:.6f}")
+    print(f"Mean relative difference (valid region): {mean_relative_diff:.6f}")
 
     # Assert that outputs are close
     # Using higher tolerance for bfloat16 and different implementations
     assert max_diff < 0.15, f"Max difference {max_diff} exceeds threshold 0.15"
     assert mean_diff < 0.02, f"Mean difference {mean_diff} exceeds threshold 0.02"
+    assert max_relative_diff < 0.001, f"Max relative difference {max_relative_diff} exceeds threshold 0.001"
+    assert mean_relative_diff < 0.001, f"Mean relative difference {mean_relative_diff} exceeds threshold 0.001"
 
     print("✓ Case 2 PASSED: FA and SDPA outputs are very close!")
 
@@ -269,7 +278,7 @@ if __name__ == "__main__":
     if torch.cuda.is_available():
         try:
             print("\n[Running Case 1: Padding Equivalence for FA]")
-            test_case1_padding_equivalence()
+            test_padding_equivalence()
         except Exception as e:
             print(f"✗ Case 1 failed: {e}")
             import traceback
@@ -278,7 +287,7 @@ if __name__ == "__main__":
 
         try:
             print("\n[Running Case 2: FA vs SDPA]")
-            test_case2_fa_vs_sdpa()
+            test_fa_vs_sdpa()
         except Exception as e:
             print(f"✗ Case 2 failed: {e}")
             import traceback
