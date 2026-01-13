@@ -77,7 +77,7 @@ class FlashAttentionImpl(AttentionImpl):
             (batch_size, seq_len, num_heads, head_dim)
         """
         query_length = query.size(1)
-        attention_mask = attn_metadata.attn_mask
+        attention_mask = attn_metadata.attn_mask if attn_metadata is not None else None
         #  Contains at least one padding token in the sequence
         if attention_mask is not None and torch.any(~attention_mask):
             assert attention_mask.ndim == 2, "attention_mask must be 2D, (batch_size, seq_len)"
