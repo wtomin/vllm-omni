@@ -234,6 +234,9 @@ def _upad_input(
             Maximum sequence length in batch (`max_seqlen_in_batch_q` for the target sequence i.e. query,
             `max_seqlen_in_batch_k` for the source sequence i.e. key/value).
     """
+    if torch.compiler.is_compiling():
+        # allow PyTorch compiler to include operations that return scalar values (like .item()
+        torch._dynamo.config.capture_scalar_outputs = True
     indices_k, cu_seqlens_k, max_seqlen_in_batch_k = _get_unpad_data(attention_mask)
 
     # With static caches, the k/v states may be larger than the mask ->
