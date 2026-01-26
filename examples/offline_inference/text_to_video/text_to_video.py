@@ -86,6 +86,13 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Number of GPUs used for ring sequence parallelism.",
     )
+    parser.add_argument(
+        "--cfg_parallel_size",
+        type=int,
+        default=1,
+        choices=[1, 2],
+        help="Number of GPUs used for classifier free guidance parallel size.",
+    )
     return parser.parse_args()
 
 
@@ -121,6 +128,9 @@ def main():
     # Check if profiling is requested via environment variable
     profiler_enabled = bool(os.getenv("VLLM_TORCH_PROFILER_DIR"))
 
+    parallel_config = DiffusionParallelConfig(
+        cfg_parallel_size=args.cfg_parallel_size,
+    )
     omni = Omni(
         model=args.model,
         vae_use_slicing=args.vae_use_slicing,
