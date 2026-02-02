@@ -122,6 +122,16 @@ class DiffusionModelRunner:
                     logger.info("Model runner: Model compiled with torch.compile.")
                 except Exception as e:
                     logger.warning(f"Model runner: torch.compile failed with error: {e}. Using eager mode.")
+
+                if hasattr(self.pipeline, "vae") and self.pipeline.vae is not None:
+                    try:
+                        self.pipeline.vae.decode = torch.compile(
+                            self.pipeline.vae.decode,
+                            dynamic=True,
+                        )
+                        logger.info("Model runner: VAE decode compiled with torch.compile.")
+                    except Exception as e:
+                        logger.warning(f"Model runner: VAE decode compile failed: {e}")
             else:
                 logger.warning(
                     "Model runner: Platform %s does not support torch inductor, skipping torch.compile.",
