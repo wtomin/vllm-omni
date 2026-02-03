@@ -8,13 +8,12 @@ This guide walks you through adding a new diffusion model to vLLM-Omni. We use *
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Prerequisites](#prerequisites)
-3. [Directory Structure](#directory-structure)
-4. [Basic Implementation](#basic-implementation) 
-5. [Advanced Features](#advanced-features)
-6. [Troubleshooting](#troubleshooting)
-7. [Pull Request Checklist](#pull-request-checklist)
-8. [Reference Implementations](#reference-implementations)
+2. [Directory Structure](#directory-structure)
+3. [Basic Implementation](#basic-implementation) 
+4. [Advanced Features](#advanced-features)
+5. [Troubleshooting](#troubleshooting)
+6. [Pull Request Checklist](#pull-request-checklist)
+7. [Reference Implementations](#reference-implementations)
 
 ---
 
@@ -97,6 +96,7 @@ Diffusers' `Mixin` classes are not needed in vLLM-Omni. Remove them:
 ```
 
 **Common mixins to remove:**
+
 - `ModelMixin` - Weight loading utilities (vLLM-Omni has its own weight loader)
 - `AttentionModuleMixin` - Attention processors (using vLLM-Omni's Attention layer instead)
 - `ConfigMixin` - Config management (not needed)
@@ -231,7 +231,7 @@ class YourModelTransformer2DModel(nn.Module):
 
 The pipeline orchestrates the full generation process (text encoding, denoising loop, VAE decoding). Adapt it from Diffusers format to vLLM-Omni's interface.
 
-#### 2.1: Copy and Remove Diffusers Inheritance
+#### 2.1: Remove Diffusers Inheritance
 
 ```bash
 # Copy pipeline from Diffusers
@@ -891,30 +891,7 @@ self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(...)
    ```python
    omni = Omni(model="...", device_map="auto")
    ```
-
-#### Issue: Slow inference
-
-**Symptoms:** Generation slower than expected
-
-**Solutions:**
-1. **Enable torch.compile:**
-   ```python
-   # In transformer: _repeated_blocks = ["BlockClassName"]
-   ```
-
-2. **Use FlashAttention:**
-   ```python
-   # Automatically used if available, or install:
-   # pip install flash-attn
-   ```
-
-3. **Enable cache acceleration:**
-   ```python
-   omni = Omni(
-       model="...",
-       cache_backend="cache_dit",  # or "tea_cache"
-   )
-   ```
+`
 
 ---
 
