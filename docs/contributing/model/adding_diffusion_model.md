@@ -1,8 +1,7 @@
 # How to Add a Diffusion Model to vLLM-Omni
 
-This comprehensive guide walks you through adding a new diffusion model to vLLM-Omni. We use Qwen-Image as the primary example, with references to other models (LongCat, Flux, Wan2.2) to illustrate different patterns.
+This guide walks you through adding a new diffusion model to vLLM-Omni. We use **Qwen-Image** as the primary example, with references to other models (LongCat, Flux, Wan2.2) to illustrate different patterns.
 
-vLLM-Omni provides a high-performance inference engine for diffusion models with support for batching, parallelism, and acceleration techniques. Adding a model involves adapting it from HuggingFace Diffusers to vLLM-Omni's optimized framework.
 
 ---
 
@@ -11,12 +10,7 @@ vLLM-Omni provides a high-performance inference engine for diffusion models with
 1. [Overview](#overview)
 2. [Prerequisites](#prerequisites)
 3. [Directory Structure](#directory-structure)
-4. [Basic Implementation](#basic-implementation)
-   - [Step 1: Adapt Transformer Model](#step-1-adapt-transformer-model)
-   - [Step 2: Adapt Pipeline](#step-2-adapt-pipeline)
-   - [Step 3: Register Model](#step-3-register-model)
-   - [Step 4: Add Example Script](#step-4-add-example-script)
-   - [Step 5: Test Your Implementation](#step-5-test-your-implementation)
+4. [Basic Implementation](#basic-implementation) 
 5. [Advanced Features](#advanced-features)
 6. [Troubleshooting](#troubleshooting)
 7. [Pull Request Checklist](#pull-request-checklist)
@@ -25,27 +19,6 @@ vLLM-Omni provides a high-performance inference engine for diffusion models with
 ---
 
 ## Overview
-
-### Why Adapt Models?
-
-When adding a diffusion model from HuggingFace Diffusers to vLLM-Omni, adaptation is required for:
-
-1. **Performance Optimization**
-   - Replace standard attention with vLLM-Omni's optimized attention backends
-   - Enable batched inference for higher throughput
-   - Support various parallelism strategies (TP, SP, CFG-Parallel)
-
-2. **Framework Integration**
-   - Follow vLLM-Omni's parameter passing mechanisms
-   - Use unified request/response interfaces
-   - Support online serving and offline inference
-
-3. **Advanced Features**
-   - Cache acceleration (TeaCache, Cache-DiT)
-   - Dynamic compilation with `torch.compile`
-   - Quantization support
-
-### Execution Flow
 
 vLLM-Omni's diffusion inference follows this architecture:
 
@@ -57,27 +30,11 @@ vLLM-Omni's diffusion inference follows this architecture:
 </p>
 
 **Key Components:**
+
 1. **Request Handling:** User prompts → `OmniDiffusionRequest`
-2. **Pipeline Execution:** Request → Model forward pass → Output
-3. **Post-processing:** Latents → Images (VAE decoding + image processing)
+2. **Diffusion Engine:**  Request → Image preprocessing (Optional) → Pipeline execution -> Image post-processing 
+2. **Pipeline Execution:** Request → Encode prompt → Diffusion steps → Vae decode
 
----
-
-## Prerequisites
-
-Before starting, ensure you have:
-
-- ✅ **Working Diffusers implementation** - Model should work in standard Diffusers
-- ✅ **Model weights** - Available on HuggingFace Hub or locally
-- ✅ **Understanding of model architecture** - Know transformer structure, attention patterns
-- ✅ **vLLM-Omni development environment** - Set up according to [installation guide](../../getting_started/installation.md)
-
-**Recommended Knowledge:**
-- Diffusion model basics (denoising, schedulers, CFG)
-- PyTorch module structure
-- HuggingFace Transformers/Diffusers APIs
-
----
 
 ## Directory Structure
 
@@ -85,30 +42,18 @@ Organize your model files following this structure:
 
 ```
 vllm_omni/
-├── diffusion/
-│   ├── registry.py                          # ← Register your model here
-│   ├── request.py                           # Request data structures
-│   └── models/
-│       └── your_model_name/                 # ← Create this directory
-│           ├── __init__.py                  # Export pipeline and transformer
-│           ├── pipeline_xxx.py              # Pipeline implementation
-│           ├── xxx_transformer.py           # Transformer implementation
-│           └── cfg_parallel.py              # (Optional) CFG-Parallel mixin
-│
-├── examples/
-│   ├── offline_inference/
-│   │   └── text_to_image/
-│   │       └── your_model_example.py        # ← Add example script
-│   └── online_serving/
-│       └── serve_your_model.py              # (Optional) Serving example
-│
-└── tests/
-    └── e2e/
-        └── offline_inference/
-            └── test_your_model.py           # ← Add tests
+└── diffusion/
+    ├── registry.py                          # ← Register your model here
+    ├── request.py                           # Request data structures
+    └── models/
+        └── your_model_name/                 # ← Create this directory
+            ├── __init__.py                  # Export pipeline and transformer
+            ├── pipeline_xxx.py              # Pipeline implementation
+            └── xxx_transformer.py           # Transformer implementation
 ```
 
 **Naming Conventions:**
+
 - **Model directory:** `your_model_name` (lowercase, underscores)
   - Examples: `qwen_image`, `flux`, `longcat_image`, `wan2_2`
 - **Pipeline file:** `pipeline_xxx.py` where `xxx` describes the task
@@ -130,11 +75,11 @@ The transformer is the core denoising network. Start by copying the transformer 
 
 ```bash
 # Create model directory
-mkdir -p vllm_omni/diffusion/models/your_model_name
+mkdir -p vllm_omni/diffusion/models/qwen_imag
 
 # Copy transformer from Diffusers (example for Qwen-Image)
 cp path/to/diffusers/src/diffusers/models/transformers/transformer_qwen_image.py \
-   vllm_omni/diffusion/models/your_model_name/your_model_transformer.py
+   vllm_omni/diffusion/models/qwen_imag/qwen_image_transformer.py
 ```
 
 #### 1.2: Remove Diffusers Mixins
@@ -144,7 +89,7 @@ Diffusers' `Mixin` classes are not needed in vLLM-Omni. Remove them:
 ```diff
 # Before (Diffusers)
 - from diffusers.models.modeling_utils import ModelMixin
-- from diffusers.models.attention_processor import AttentionProcessor, AttentionModuleMixin
+- from diffusers.models.attention_processor import AttentionModuleMixin
 
 - class YourModelTransformer2DModel(ModelMixin, AttentionModuleMixin):
 + class YourModelTransformer2DModel(nn.Module):
@@ -152,9 +97,10 @@ Diffusers' `Mixin` classes are not needed in vLLM-Omni. Remove them:
 ```
 
 **Common mixins to remove:**
-- `ModelMixin` - Weight loading utilities (vLLM-Omni has its own)
+- `ModelMixin` - Weight loading utilities (vLLM-Omni has its own weight loader)
 - `AttentionModuleMixin` - Attention processors (using vLLM-Omni's Attention layer instead)
-- `ConfigMixin` - Config management (using `OmniDiffusionConfig` instead)
+- `ConfigMixin` - Config management (not needed)
+- `PeftAdapterMixin` - Parameter efficient finetune utilities (not needed)
 
 #### 1.3: Replace Attention Implementation
 
@@ -166,12 +112,7 @@ from diffusers.models.attention_processor import dispatch_attention_fn
 
 class YourAttentionBlock(nn.Module):
     def forward(self, hidden_states, encoder_hidden_states=None, ...):
-        # Query, key, value projections
-        query = self.to_q(hidden_states)
-        key = self.to_k(encoder_hidden_states or hidden_states)
-        value = self.to_v(encoder_hidden_states or hidden_states)
-
-        # Attention computation
+        ...
         hidden_states = dispatch_attention_fn(
             query, key, value,
             attn_mask=attention_mask,
@@ -194,42 +135,26 @@ class YourAttentionBlock(nn.Module):
         self.attn = Attention(
             num_heads=self.num_heads,
             head_size=self.head_dim,
-            softmax_scale=1.0 / (self.head_dim ** 0.5),  # Attention scaling
+            softmax_scale=1.0 / (self.head_dim ** 0.5), 
             causal=False,  # Diffusion models typically use bidirectional attention
-            num_kv_heads=self.num_kv_heads,  # For GQA/MQA, set to num_heads for MHA
+            num_kv_heads=self.num_kv_heads,
         )
 
     def forward(self, hidden_states, encoder_hidden_states=None, attention_mask=None, ...):
-        # Query, key, value projections
-        query = self.to_q(hidden_states)
-        key = self.to_k(encoder_hidden_states or hidden_states)
-        value = self.to_v(encoder_hidden_states or hidden_states)
-
-        # Reshape for multi-head attention: [B, seq, hidden] → [B, seq, num_heads, head_dim]
-        batch_size, seq_len = query.shape[:2]
-        query = query.view(batch_size, seq_len, self.num_heads, self.head_dim)
-        key = key.view(batch_size, -1, self.num_kv_heads, self.head_dim)
-        value = value.view(batch_size, -1, self.num_kv_heads, self.head_dim)
-
+        ...
         # Create attention metadata
         attn_metadata = AttentionMetadata(attn_mask=attention_mask)
-
-        # Attention computation - returns [B, seq, num_heads, head_dim]
         hidden_states = self.attn(query, key, value, attn_metadata=attn_metadata)
 
-        # Reshape back: [B, seq, num_heads, head_dim] → [B, seq, hidden]
-        hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
-
-        return hidden_states
 ```
 
 **Key Points:**
-- **Attention layer initialization:** Done in `__init__`, not per-forward
-- **Tensor reshaping:** vLLM-Omni expects `[B, seq, num_heads, head_dim]` format
-- **AttentionMetadata:** Wraps attention mask and other metadata
-- **No need for `dispatch_attention_fn`:** vLLM-Omni selects backend automatically
 
-**Attention backends:** vLLM-Omni automatically selects the best backend (FlashAttention, xFormers, PyTorch SDPA) based on hardware and sequence length.
+- **Attention layer initialization:** Done in `__init__`, not per-forward
+- **Tensor shapes:** vLLM-Omni expects QKV to have `[B, seq, num_heads, head_dim]` shape
+- **AttentionMetadata:** Wraps attention mask and other metadata
+
+**Attention backends:** vLLM-Omni automatically selects the attention backend given the env variable `DIFFUSION_ATTENTION_BACKEND`. The default attention backend is `FLASH_ATTN` for diffusion models.
 
 #### 1.4: Replace Imports and Utilities
 
@@ -243,20 +168,12 @@ class YourAttentionBlock(nn.Module):
 ```
 
 **Custom layers (if needed):**
-```python
-# vLLM's optimized implementations
-from vllm.model_executor.layers.layernorm import RMSNorm
-from vllm.model_executor.layers.linear import ColumnParallelLinear, RowParallelLinear
 
-# vLLM-Omni's diffusion-specific layers
+```python
+from vllm.model_executor.layers.layernorm import RMSNorm
 from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 from vllm_omni.diffusion.layers.adalayernorm import AdaLayerNorm
 ```
-
-**Use vLLM's layers when available for:**
-- Better performance (fused kernels)
-- Tensor parallelism support
-- Quantization compatibility
 
 #### 1.5: Remove Training-Only Code
 
@@ -309,170 +226,6 @@ class YourModelTransformer2DModel(nn.Module):
         self.hidden_size = hidden_size
         # ... initialize layers
 ```
-
-#### 1.7: Complete Example (Qwen-Image Transformer)
-
-Here's a simplified example showing the key adaptations:
-
-```python
-# vllm_omni/diffusion/models/qwen_image/qwen_image_transformer.py
-
-import torch
-import torch.nn as nn
-from vllm.logger import init_logger
-from vllm.model_executor.layers.layernorm import RMSNorm
-
-from vllm_omni.diffusion.attention.layer import Attention
-from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
-from vllm_omni.diffusion.data import OmniDiffusionConfig
-from vllm_omni.diffusion.layers.adalayernorm import AdaLayerNorm
-from vllm_omni.diffusion.layers.rope import RotaryEmbedding
-
-logger = init_logger(__name__)
-
-
-class QwenImageTransformerBlock(nn.Module):
-    """Single transformer block for Qwen-Image (dual-stream)."""
-
-    def __init__(
-        self,
-        hidden_size: int,
-        num_heads: int,
-        mlp_ratio: float = 4.0,
-        **kwargs,
-    ):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.head_dim = hidden_size // num_heads
-
-        # Image stream (self-attention)
-        self.img_norm1 = AdaLayerNorm(hidden_size, ada_dim=hidden_size)
-        self.img_attn = Attention(
-            num_heads=num_heads,
-            head_size=self.head_dim,
-            softmax_scale=1.0 / (self.head_dim ** 0.5),
-            causal=False,
-            num_kv_heads=num_heads,
-        )
-
-        # Text-to-image cross-attention
-        self.txt_norm1 = RMSNorm(hidden_size)
-        self.txt_attn = Attention(
-            num_heads=num_heads,
-            head_size=self.head_dim,
-            softmax_scale=1.0 / (self.head_dim ** 0.5),
-            causal=False,
-            num_kv_heads=num_heads,
-        )
-
-        # MLP
-        self.img_norm2 = AdaLayerNorm(hidden_size, ada_dim=hidden_size)
-        self.mlp = nn.Sequential(
-            nn.Linear(hidden_size, int(hidden_size * mlp_ratio)),
-            nn.GELU(),
-            nn.Linear(int(hidden_size * mlp_ratio), hidden_size),
-        )
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,  # Image features
-        encoder_hidden_states: torch.Tensor,  # Text features
-        temb: torch.Tensor,  # Timestep embedding
-        image_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
-        **kwargs,
-    ):
-        # Image self-attention
-        norm_hidden_states = self.img_norm1(hidden_states, temb)
-        attn_output = self.img_attn(
-            norm_hidden_states,
-            norm_hidden_states,
-            norm_hidden_states,
-            attn_metadata=AttentionMetadata(),
-        )
-        hidden_states = hidden_states + attn_output
-
-        # Text-to-image cross-attention
-        norm_encoder_states = self.txt_norm1(encoder_hidden_states)
-        cross_attn_output = self.txt_attn(
-            hidden_states,
-            norm_encoder_states,
-            norm_encoder_states,
-            attn_metadata=AttentionMetadata(),
-        )
-        encoder_hidden_states = encoder_hidden_states + cross_attn_output
-
-        # MLP
-        norm_hidden_states = self.img_norm2(hidden_states, temb)
-        mlp_output = self.mlp(norm_hidden_states)
-        hidden_states = hidden_states + mlp_output
-
-        return encoder_hidden_states, hidden_states
-
-
-class QwenImageTransformer2DModel(nn.Module):
-    """Qwen-Image transformer with dual-stream architecture."""
-
-    def __init__(
-        self,
-        *,
-        od_config: OmniDiffusionConfig | None = None,
-        num_layers: int = 28,
-        hidden_size: int = 3072,
-        num_heads: int = 24,
-        **kwargs,
-    ):
-        super().__init__()
-        self.od_config = od_config
-        self.parallel_config = od_config.parallel_config if od_config else None
-
-        # Input projections
-        self.img_in = nn.Linear(16, hidden_size)  # VAE latent channels
-        self.txt_in = nn.Linear(3584, hidden_size)  # Text encoder dim
-
-        # Positional embeddings
-        self.pos_embed = RotaryEmbedding(dim=self.head_dim)
-
-        # Transformer blocks
-        self.transformer_blocks = nn.ModuleList([
-            QwenImageTransformerBlock(hidden_size, num_heads)
-            for _ in range(num_layers)
-        ])
-
-        # Output projection
-        self.norm_out = AdaLayerNorm(hidden_size, ada_dim=hidden_size)
-        self.proj_out = nn.Linear(hidden_size, 16)
-
-    def forward(
-        self,
-        hidden_states: torch.Tensor,
-        encoder_hidden_states: torch.Tensor,
-        timestep: torch.Tensor,
-        **kwargs,
-    ):
-        # Input projection
-        hidden_states = self.img_in(hidden_states)
-        encoder_hidden_states = self.txt_in(encoder_hidden_states)
-
-        # Create timestep embedding
-        temb = self.timestep_embedding(timestep)
-
-        # Process through blocks
-        for block in self.transformer_blocks:
-            encoder_hidden_states, hidden_states = block(
-                hidden_states,
-                encoder_hidden_states,
-                temb,
-            )
-
-        # Output projection
-        hidden_states = self.norm_out(hidden_states, temb)
-        output = self.proj_out(hidden_states)
-
-        return (output,)
-```
-
----
 
 ### Step 2: Adapt Pipeline
 
@@ -590,6 +343,7 @@ class YourModelPipeline(nn.Module):
 ```
 
 **Key Changes:**
+
 1. **`od_config` parameter:** All configuration through `OmniDiffusionConfig`
 2. **Manual component loading:** No `register_modules()`, load each component explicitly
 3. **Local files support:** Check `os.path.exists(model)` for local checkpoints
@@ -598,6 +352,7 @@ class YourModelPipeline(nn.Module):
 #### 2.3: Adapt `__call__` → `forward` Method
 
 **Change signature:**
+
 ```diff
 - @torch.no_grad()
 - def __call__(
@@ -616,6 +371,7 @@ class YourModelPipeline(nn.Module):
 ```
 
 **Extract parameters from request:**
+
 ```python
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.data import DiffusionOutput
@@ -649,6 +405,7 @@ def forward(
 ```
 
 **Wrap output:**
+
 ```diff
     # Generate images
     images = self.vae.decode(latents)[0]
@@ -663,8 +420,6 @@ vLLM-Omni separates image processing from the main pipeline for better modularit
 
 **Post-processing function (required):**
 ```python
-# vllm_omni/diffusion/models/your_model_name/pipeline_your_model.py
-
 def get_your_model_post_process_func(
     od_config: OmniDiffusionConfig,
 ):
@@ -706,6 +461,7 @@ def get_your_model_post_process_func(
 ```
 
 **Pre-processing function (for image editing pipelines):**
+
 ```python
 def get_your_model_pre_process_func(
     od_config: OmniDiffusionConfig,
@@ -776,102 +532,6 @@ class YourModelPipeline(nn.Module):
         return loader.load_weights(weights)
 ```
 
-#### 2.6: Complete Pipeline Example
-
-Here's a complete minimal pipeline:
-
-```python
-# vllm_omni/diffusion/models/your_model_name/pipeline_your_model.py
-
-import torch
-import torch.nn as nn
-from diffusers import AutoencoderKL
-from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
-
-from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.request import OmniDiffusionRequest
-from vllm_omni.diffusion.distributed.utils import get_local_device
-from vllm_omni.diffusion.models.your_model_name.your_model_transformer import (
-    YourModelTransformer2DModel,
-)
-
-
-class YourModelPipeline(nn.Module):
-    def __init__(self, *, od_config: OmniDiffusionConfig, prefix: str = ""):
-        super().__init__()
-        self.od_config = od_config
-        self.device = get_local_device()
-
-        model = od_config.model
-        local_files_only = os.path.exists(model)
-
-        # Load components
-        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            model, subfolder="scheduler", local_files_only=local_files_only
-        )
-        self.vae = AutoencoderKL.from_pretrained(
-            model, subfolder="vae", local_files_only=local_files_only
-        ).to(self.device)
-        self.transformer = YourModelTransformer2DModel(od_config=od_config)
-
-        self.vae_scale_factor = 8
-        self.default_sample_size = 128
-
-    def encode_prompt(self, prompt: list[str]):
-        """Encode text prompts."""
-        # Implement text encoding
-        # ...
-        return prompt_embeds
-
-    def forward(
-        self,
-        req: OmniDiffusionRequest,
-        prompt: str | list[str] = None,
-        **kwargs,
-    ) -> DiffusionOutput:
-        # Extract parameters from request
-        prompt = [p if isinstance(p, str) else p.get("prompt") for p in req.prompts] or prompt
-        sampling_params = req.sampling_params
-
-        # Encode prompt
-        prompt_embeds = self.encode_prompt(prompt)
-
-        # Prepare latents
-        batch_size = len(prompt)
-        latents = torch.randn(
-            batch_size, 4,
-            sampling_params.height // self.vae_scale_factor,
-            sampling_params.width // self.vae_scale_factor,
-        ).to(self.device)
-
-        # Denoising loop
-        self.scheduler.set_timesteps(sampling_params.num_inference_steps)
-        for t in self.scheduler.timesteps:
-            # Predict noise
-            noise_pred = self.transformer(
-                latents,
-                encoder_hidden_states=prompt_embeds,
-                timestep=t,
-            )[0]
-
-            # Scheduler step
-            latents = self.scheduler.step(noise_pred, t, latents)[0]
-
-        # Decode latents
-        images = self.vae.decode(latents)[0]
-
-        return DiffusionOutput(output=images)
-
-
-def get_your_model_post_process_func(od_config: OmniDiffusionConfig):
-    """Create post-processing function."""
-    from diffusers.image_processor import VaeImageProcessor
-    image_processor = VaeImageProcessor(vae_scale_factor=8)
-    return lambda images: image_processor.postprocess(images, output_type="pil")
-```
-
----
-
 ### Step 3: Register Model
 
 Register your model in `vllm_omni/diffusion/registry.py` so vLLM-Omni can discover and load it.
@@ -897,17 +557,20 @@ _DIFFUSION_MODELS = {
 }
 ```
 
-**Naming:**
-- **Key:** Pipeline class name (e.g., `"YourModelPipeline"`)
-- **Folder:** Directory under `vllm_omni/diffusion/models/`
-- **File:** Python file name without extension
-- **Class:** Exact class name in the file
-
-#### 3.2: Register Post-Processing Function
+#### 3.2: Register Pre/Post-Processing Function
 
 ```python
 # vllm_omni/diffusion/registry.py
-
+_DIFFUSION_PRE_PROCESS_FUNCS = {
+    # arch: pre_process_func
+    # `pre_process_func` function must be placed in {mod_folder}/{mod_relname}.py,
+    # where mod_folder and mod_relname are  defined and mapped using `_DIFFUSION_MODELS` via the `arch` key
+    "GlmImagePipeline": "get_glm_image_pre_process_func",
+    "QwenImageEditPipeline": "get_qwen_image_edit_pre_process_func",
+    
+    # Add your model
+    "YourModelPipeline": "get_your_model_pre_process_func", # Optional
+}
 _DIFFUSION_POST_PROCESS_FUNCS = {
     # Format: "PipelineClassName": "function_name"
 
@@ -920,30 +583,8 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
 }
 ```
 
-**Function must:**
-- Be defined in the same file as pipeline (`pipeline_your_model.py`)
-- Accept `od_config: OmniDiffusionConfig` as parameter
-- Return a callable that converts tensors to PIL images
 
-#### 3.3: Register Pre-Processing Function (Optional)
-
-For image editing pipelines:
-
-```python
-# vllm_omni/diffusion/registry.py
-
-_DIFFUSION_PRE_PROCESS_FUNCS = {
-    # Format: "PipelineClassName": "function_name"
-
-    # Existing models
-    "QwenImageEditPipeline": "get_qwen_image_edit_pre_process_func",
-
-    # Add your editing pipeline
-    "YourModelEditPipeline": "get_your_model_edit_pre_process_func",
-}
-```
-
-#### 3.4: Export from Module
+#### 3.3: Export from Module
 
 Create/update `__init__.py` to export your classes:
 
@@ -967,182 +608,75 @@ __all__ = [
 
 ### Step 4: Add Example Script
 
-Provide a runnable example demonstrating how to use your model.
+If your model is one of Text-to-Image, Text-to-Audio, Text-to-Video, Image-to-Image, Image-to-Video models, you can simply try one of the following offline inference scripts to run your model:
+
+| Model Category | Offline Inference Script |
+|---|---|
+| Image-to-Image | `.\examples\offline_inference\image_to_image\image_edit.py` |
+| Image-to-Video | `.\examples\offline_inference\image_to_video\image_to_video.py` |
+| Text-to-Image | `.\examples\offline_inference\text_to_image\text_to_image.py` |
+| Text-to-Audio | `.\examples\offline_inference\text_to_audio\text_to_audio.py` |
+| Text-to-Video | `.\examples\offline_inference\text_to_video\text_to_video.py` |
+
+If your model is an Omni (understanding and generation) model, please follow the steps below.
 
 #### 4.1: Create Example File
 
-```python
-# examples/offline_inference/text_to_image/your_model_example.py
+Follow the **BAGEL** examples for both offline and online:
 
-"""
-Example: Text-to-Image Generation with Your Model
+- Offline: `examples/offline_inference/bagel/`
+- Online: `examples/online_serving/bagel/`
 
-This script demonstrates how to use Your Model for text-to-image generation
-with vLLM-Omni.
-
-Usage:
-    python your_model_example.py --model path/to/model --prompt "a cat"
-"""
-
-import argparse
-from pathlib import Path
-
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Your Model Text-to-Image Example")
-    parser.add_argument(
-        "--model",
-        type=str,
-        default="your-org/your-model-name",
-        help="Model name on HuggingFace Hub or local path",
-    )
-    parser.add_argument(
-        "--prompt",
-        type=str,
-        default="a beautiful landscape with mountains and a lake",
-        help="Text prompt for image generation",
-    )
-    parser.add_argument(
-        "--negative-prompt",
-        type=str,
-        default="blurry, low quality",
-        help="Negative prompt",
-    )
-    parser.add_argument(
-        "--num-inference-steps",
-        type=int,
-        default=50,
-        help="Number of denoising steps",
-    )
-    parser.add_argument(
-        "--guidance-scale",
-        type=float,
-        default=7.5,
-        help="Classifier-free guidance scale",
-    )
-    parser.add_argument(
-        "--height",
-        type=int,
-        default=512,
-        help="Image height in pixels",
-    )
-    parser.add_argument(
-        "--width",
-        type=int,
-        default=512,
-        help="Image width in pixels",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="./outputs",
-        help="Directory to save generated images",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for reproducibility",
-    )
-    args = parser.parse_args()
-
-    # Create output directory
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Initialize model
-    print(f"Loading model: {args.model}")
-    omni = Omni(
-        model=args.model,
-        trust_remote_code=True,  # If model uses custom code
-    )
-
-    # Create sampling parameters
-    sampling_params = OmniDiffusionSamplingParams(
-        num_inference_steps=args.num_inference_steps,
-        guidance_scale=args.guidance_scale,
-        height=args.height,
-        width=args.width,
-        seed=args.seed,
-    )
-
-    # Generate image
-    print(f"Generating image with prompt: '{args.prompt}'")
-    outputs = omni.generate(
-        prompts=[args.prompt],
-        negative_prompts=[args.negative_prompt] if args.negative_prompt else None,
-        sampling_params=sampling_params,
-    )
-
-    # Save generated image
-    for i, output in enumerate(outputs):
-        image = output.outputs[0]  # Get PIL image
-        output_path = output_dir / f"generated_{i}.png"
-        image.save(output_path)
-        print(f"Saved image to: {output_path}")
-
-    print("Done!")
-
-
-if __name__ == "__main__":
-    main()
-```
-
-**Key elements:**
-- Command-line arguments for all major parameters
-- Clear usage documentation
-- Output saving with informative filenames
-- Progress messages for user feedback
-
-#### 4.2: Add README Section
-
-Update the main README or create a model-specific README:
-
-```markdown
-## Your Model
-
-Text-to-image generation with Your Model.
-
-### Quick Start
+Add **two example folders** for your model:
 
 ```bash
-python examples/offline_inference/text_to_image/your_model_example.py \
-    --model your-org/your-model-name \
-    --prompt "a beautiful landscape" \
-    --output-dir ./outputs
+mkdir -p examples/offline_inference/your_model_name
+mkdir -p examples/online_serving/your_model_name
 ```
 
-### Parameters
+**Offline (recommended minimum):** create `examples/offline_inference/your_model_name/end2end.py` and a README.
 
-- `--model`: Model identifier or local path
-- `--prompt`: Text description of desired image
-- `--num-inference-steps`: Number of denoising steps (default: 50)
-- `--guidance-scale`: CFG scale (default: 7.5)
-- `--height`, `--width`: Image dimensions (default: 512x512)
+- Script: `examples/offline_inference/your_model_name/end2end.py`
+  - Parse args like BAGEL (`--model`, `--modality`, optional `--image-path`, `--steps`, etc.)
+  - Use `from vllm_omni.entrypoints.omni import Omni` (or `OmniDiffusion` if your model is diffusion-only)
+  - Save outputs (images/audio/video/text) with deterministic filenames (e.g., `output_0_0.png`)
+- Doc: `examples/offline_inference/your_model_name/README.md`
+  - Include at least one runnable command, e.g.:
 
-### Examples
-
-**High quality:**
 ```bash
-python your_model_example.py --num-inference-steps 100 --guidance-scale 9.0
+cd examples/offline_inference/your_model_name
+python end2end.py --model your-org/your-model-name --modality text2img --prompts "A cute cat"
 ```
 
-**Fast generation:**
+#### 4.2: Add Online Serving Example (OpenAI-Compatible)
+
+Mirror BAGEL’s online serving setup:
+
+- Server launcher: `examples/online_serving/your_model_name/run_server.sh`
+  - Wrap `vllm serve ... --omni --port ...` (and `--stage-configs-path ...` if needed)
+- Client: `examples/online_serving/your_model_name/openai_chat_client.py`
+  - Send requests to `POST /v1/chat/completions`
+  - Support multimodal inputs (e.g., base64 image) if your model needs it
+- Doc: `examples/online_serving/your_model_name/README.md`
+  - Include both “launch server” and “send request”:
+
 ```bash
-python your_model_example.py --num-inference-steps 20 --guidance-scale 5.0
-```
+# Terminal 1: launch server
+cd examples/online_serving/your_model_name
+bash run_server.sh
+
+# Terminal 2: send request
+python openai_chat_client.py --prompt "A cute cat" --modality text2img
 ```
 
----
 
 ### Step 5: Test Your Implementation
 
 Before submitting, thoroughly test your implementation.
 
 #### 5.1: Basic Functionality Test
+
+End-to-end test script is optional. Please the important model's e2e test in CI.
 
 ```python
 # tests/e2e/offline_inference/test_your_model.py
@@ -1176,108 +710,12 @@ def test_your_model_text_to_image(model):
     assert isinstance(image, Image.Image)
     assert image.size == (512, 512)
 
-
-@pytest.mark.parametrize("batch_size", [1, 2, 4])
-def test_your_model_batching(batch_size):
-    """Test batched generation."""
-    omni = Omni(model="your-org/your-model-name")
-
-    prompts = [f"image {i}" for i in range(batch_size)]
-    outputs = omni.generate(
-        prompts=prompts,
-        sampling_params=OmniDiffusionSamplingParams(
-            num_inference_steps=20,
-        ),
-    )
-
-    assert len(outputs) == batch_size
-    for output in outputs:
-        assert isinstance(output.outputs[0], Image.Image)
-
-
-def test_your_model_guidance_scale():
-    """Test different guidance scales."""
-    omni = Omni(model="your-org/your-model-name")
-
-    for guidance_scale in [1.0, 5.0, 10.0]:
-        outputs = omni.generate(
-            prompts=["a cat"],
-            sampling_params=OmniDiffusionSamplingParams(
-                num_inference_steps=20,
-                guidance_scale=guidance_scale,
-                seed=42,
-            ),
-        )
-        assert len(outputs) == 1
 ```
 
-#### 5.2: Visual Quality Check
+#### 5.2: Performance/Speed Check
 
-Generate test images and manually verify quality:
-
-```python
-# scripts/test_visual_quality.py
-
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-omni = Omni(model="your-org/your-model-name")
-
-test_prompts = [
-    "a photorealistic portrait of a person",
-    "an abstract painting with vibrant colors",
-    "a futuristic cityscape at night",
-    "a cute puppy playing in grass",
-]
-
-for i, prompt in enumerate(test_prompts):
-    outputs = omni.generate(
-        prompts=[prompt],
-        sampling_params=OmniDiffusionSamplingParams(
-            num_inference_steps=50,
-            guidance_scale=7.5,
-            seed=42,
-        ),
-    )
-    outputs[0].outputs[0].save(f"test_output_{i}.png")
-    print(f"Generated: {prompt}")
-```
-
-Compare outputs with Diffusers baseline to ensure correctness.
-
-#### 5.3: Performance Benchmark
-
-Compare inference speed with Diffusers:
-
-```python
-# scripts/benchmark_your_model.py
-
-import time
-from diffusers import DiffusionPipeline
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-model_name = "your-org/your-model-name"
-
-# Benchmark Diffusers
-pipe_diffusers = DiffusionPipeline.from_pretrained(model_name).to("cuda")
-start = time.time()
-_ = pipe_diffusers("a cat", num_inference_steps=50)
-time_diffusers = time.time() - start
-
-# Benchmark vLLM-Omni
-omni = Omni(model=model_name)
-start = time.time()
-_ = omni.generate(
-    prompts=["a cat"],
-    sampling_params=OmniDiffusionSamplingParams(num_inference_steps=50),
-)
-time_vllm_omni = time.time() - start
-
-print(f"Diffusers: {time_diffusers:.2f}s")
-print(f"vLLM-Omni: {time_vllm_omni:.2f}s")
-print(f"Speedup: {time_diffusers / time_vllm_omni:.2f}x")
-```
+Manually compare **latency/throughput**, **peak GPU memory**, and **output quality** against a Diffusers baseline.
+For a fair comparison, keep the same **prompt**, **seed**, **resolution**, **num_inference_steps**, and **guidance settings**, and run multiple trials to reduce randomness. Record the results (and your hardware / driver / CUDA versions) in the PR description.
 
 ---
 
@@ -1342,18 +780,18 @@ omni = Omni(model="your-model", tensor_parallel_size=2)
 See detailed guide: [How to add CFG-Parallel support](../features/cfg_parallel.md)
 
 **Quick setup:**
-1. Create a CFG mixin inheriting from `CFGParallelMixin`
-2. Implement `diffuse()` method
-3. Inherit mixin in your pipeline class
+
+1. Implement `diffuse()` method
+2. Inherit `CFGParallelMixin` in your pipeline class
 
 ### Sequence Parallelism
 
 See detailed guide: [How to add Sequence Parallel support](../features/sequence_parallel.md)
 
 **Quick setup:**
+
 1. Add `_sp_plan` class attribute to transformer
 2. Specify where to shard/gather tensors
-3. Extract inline operations into submodules
 
 ### Cache Acceleration
 
@@ -1362,15 +800,17 @@ See detailed guide: [How to add Sequence Parallel support](../features/sequence_
 See detailed guide: [How to add TeaCache support](../features/teacache.md)
 
 **Quick setup:**
+
 1. Write extractor function
 2. Register in `EXTRACTOR_REGISTRY`
-3. Add polynomial coefficients
+3. Add polynomial coefficients (optional)
 
 #### Cache-DiT
 
 See detailed guide: [How to add Cache-DiT support](../features/cache_dit.md)
 
 **Quick setup:**
+
 - For standard models: Works automatically!
 - For complex architectures: Write custom enabler
 
@@ -1389,21 +829,6 @@ See detailed guide: [How to add Cache-DiT support](../features/cache_dit.md)
 2. Wrong class name in registry
 3. Missing `__init__.py` exports
 
-**Solutions:**
-```python
-# 1. Check registry.py
-_DIFFUSION_MODELS = {
-    "YourModelPipeline": ("your_model_name", "pipeline_your_model", "YourModelPipeline"),
-    #                      ^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^
-    #                      Folder name        File name             Class name
-}
-
-# 2. Check __init__.py exports
-# vllm_omni/diffusion/models/your_model_name/__init__.py
-from .pipeline_your_model import YourModelPipeline
-
-__all__ = ["YourModelPipeline"]
-```
 
 #### Issue: Shape mismatch in attention
 
@@ -1507,8 +932,8 @@ When submitting a PR to add your model, include:
 ### 2. Example and Tests
 
 - ✅ Example script in `examples/`
-- ✅ Test file in `tests/e2e/`
-- ✅ README documentation
+- ✅ Test file in `tests/e2e/` (optional)
+- ✅ README documentation (optional)
 
 ### 3. Verification Results
 
@@ -1529,9 +954,8 @@ Batch size: 1
 Inference steps: 50
 Image size: 512x512
 
-Diffusers: 3.2s
-vLLM-Omni: 2.1s
-Speedup: 1.52x
+Diffusers: xxx s
+vLLM-Omni: xxx s
 ```
 
 **Parallelism Support:**
@@ -1552,28 +976,8 @@ Speedup: 1.52x
 
 - ✅ Model-specific documentation (if needed)
 - ✅ Usage examples
-- ✅ Known limitations
 
-### 5. Code Quality
-
-- ✅ Passes linting (`ruff check`)
-- ✅ Passes type checking (`mypy`)
-- ✅ All tests pass
-- ✅ No degradation in existing tests
-
-**Run checks:**
-```bash
-# Linting
-ruff check vllm_omni/diffusion/models/your_model_name/
-
-# Type checking
-mypy vllm_omni/diffusion/models/your_model_name/
-
-# Tests
-pytest tests/e2e/offline_inference/test_your_model.py -v
-```
-
-### 6. Model Recipe (Optional but Recommended)
+### 5. Model Recipe (Optional)
 
 Add a model recipe to [vllm-project/recipes](https://github.com/vllm-project/recipes) showing:
 - Installation instructions
@@ -1594,13 +998,6 @@ Study these complete examples:
 | **Wan2.2** | Video transformer | Dual transformers, SP, temporal attention | `vllm_omni/diffusion/models/wan2_2/` |
 | **Flux** | Image transformer | Single-stream, SP | `vllm_omni/diffusion/models/flux/` |
 | **Z-Image** | Unified sequence | Concatenated input, SP | `vllm_omni/diffusion/models/z_image/` |
-
-**Code locations:**
-- **Transformers:** `vllm_omni/diffusion/models/{model_name}/{model_name}_transformer.py`
-- **Pipelines:** `vllm_omni/diffusion/models/{model_name}/pipeline_{model_name}.py`
-- **CFG Mixins:** `vllm_omni/diffusion/models/{model_name}/cfg_parallel.py`
-- **Examples:** `examples/offline_inference/{task}/{model_name}_example.py`
-- **Tests:** `tests/e2e/offline_inference/test_{model_name}.py`
 
 ---
 
