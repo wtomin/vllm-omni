@@ -4,9 +4,8 @@ This guide walks through the process of adding a new Diffusion model to vLLM-Omn
 # Table of Contents
 1. [Overview](#overview)
 2. [Directory Structure](#directory-structure)
-3. [Step-by-Step Implementation](#step-by-step-implementation)
-4. [Testing](#testing)
-5. [Adding a Model Recipe](#adding-a-model-recipe)
+3. [Step-by-Step Implementation (Basic)](#step-by-step-implementation-basic)
+
 
 
 # Overview
@@ -39,119 +38,332 @@ vllm_omni/
     └── registry.py                       # Registry work
     ├── request.py                        # Request Info
     └── models/your_model_name/           # Model directory (e.g., qwen_image)
-        └── pipeline_xxx.py               # Model implementation (e.g., pipeline_qwen_image_edit.py)
+        ├── pipeline_xxx.py               # Pipeline implementation (e.g., pipeline_qwen_image_edit.py)
+        └── xxx_transformer.py            # Transformer model implementation (e.g., qwen_image_transformer.py)
 ```
 
-# Step-by-step-implementation
-## Step 1: Model Implementation
-The diffusion pipeline’s implementation follows **HuggingFace Diffusers**.
-### 1.1 Define the Pipeline Class
-Define the pipeline class, e.g., `QwenImageEditPipeline`, and initialize all required submodules, either from HuggingFace `diffusers` or custom implementations. In `QwenImageEditPipeline`, only `QwenImageTransformer2DModel` is re-implemented to support optimizations such as Ulysses-SP. When adding new models in the future, you can either reuse this re-implemented `QwenImageTransformer2DModel` or extend it as needed.
+# Step-by-step-implementation (Basic)
 
-### 1.2 Pre-Processing and Post-Processing Extraction
-Extract the pre-processing and post-processing logic from the pipeline class to follow vLLM-Omni’s execution flow. For Qwen-Image-Edit:
+This is the basic adaptation tutorial on how to add a diffusion model step by step. Following this tutorial, you will know how to adapt an existing model/pipeline in **HuggingFace Diffusers** to vLLM-Omni, and support the basic features (e.g., online/offline serving, batch request).
+
+For the advanced adaptation tutorial for optimized features (e.g., parallelism, cache acceleration), please see
+
+## Step 1: Model/Pipeline Implementation
+
+### 1.1 Implement the Model class
+
+We would recommend you to first copy the `xxx_transformer.py` from diffusers to `vllm_omni/diffusion/models/your_model_name/ `, and make the following revisions:
+
+1. Remove Diffusers' `Mixin` inheritance
+
+Diffusers' `Mixin` classes (e.g., `ModelMixin`, `AttentionModuleMixin`) are not necessary for `vLLM-Omni`. Please remove them. For example:
+```diff
+- class LongCatImageAttention(torch.nn.Module, AttentionModuleMixin):
++ class LongCatImageAttention(torch.nn.Module):
+```
+
+2. Replace Diffusers' Attention
+
+Latest diffusers model implementation uses `dispatch_attention_fn` to run attention computation on different backends. A typical function call looks like:
+
 ```python
-def get_qwen_image_edit_pre_process_func(
-    od_config: OmniDiffusionConfig,
-):
-    """
-    Define a pre-processing function that resizes input images and
-    pre-process for subsequent inference.
-    """
+hidden_states = dispatch_attention_fn(
+    query, # bs, seq_len, num_heads, head_dim
+    key # bs, seq_len, num_heads, head_dim
+    value, # bs, seq_len, num_heads, head_dim
+    attn_mask=attention_mask,
+    dropout_p=0.0,
+    is_causal=False,
+    backend=self._attention_backend,
+    parallel_config=self._parallel_config,
+)
 ```
 
-```python
-def get_qwen_image_edit_post_process_func(
-    od_config: OmniDiffusionConfig,
-):
-    """
-    Defines a post-processing function that post-process images.
-    """
-```
+vLLM-Omni has its own [`Attention`](../../design/module/dit_module.md#5-acceleration-components) interface, which can support various attention backends, and allow users to set different parallelism configuration (See in advanced tutorial). See more details about backends selection and attention parallelsim in [Attention Doc](../../design/module/dit_module.md#5-acceleration-components).
 
-### 1.3 Define the forward function
-The forward function of `QwenImageEditPipeline` follows the HuggingFace `diffusers` design for the most part. The key differences are:
-+ As described in the overview, arguments are passed through `OnniDiffusionRequest`, so we need to get user parameters from it accordingly.
-```python
-prompt = req.prompt
-```
-+ pre/post-processing are handled by the framework elsewhere, so skip them.
-
-### 1.4 Replace some ops or layers in DiT component
-
-vLLM-Omni provides a set of optimized operators with better performance and built-in support for parallelism, including attention, rotary embeddings (RoPE), and linear layers.
-
-Below is an example showing how to replace standard Transformer attention and FFN layers with vLLM-Omni implementations:
-
+Here is an example of how to use vLLM-Omni's `Attention`:
 ```python
 from vllm_omni.diffusion.attention.layer import Attention
-from vllm_omni.diffusion.layers.rope import RotaryEmbedding
+from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+class xxxModule(torch.nn.Module)
+    def __init__(...):
+        self.attn = Attention(
+        num_heads=self.num_heads,
+        head_size=self.head_dim,
+        softmax_scale=1.0 / (self.head_dim**0.5),
+        causal=False,
+        num_kv_heads=self.num_kv_heads,
+    )
 
-class MyAttention(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.attn = Attention()
-        self.to_qkv = QKVParallelLinear()
-        self.to_out = RowParallelLinear()
-        self.rope = RotaryEmbedding(is_neox_style=False)
-
-    def forward(self, hidden_states):
-        qkv, _ = self.to_qkv(hidden_states)
-        q, k, v = qkv.split(...)
-        q, k = self.rope(...)
-        attn_output = self.attn(q, k, v)
-        output = self.to_out(attn_output)
-
-class MyFFN(nn.Module):
-    def __init__(self):
-        super().__init__()
-        self.fc1 = ColumnParallelLinear()
-        self.fc2 = RowParallelLinear()
-        self.act = F.gelu
-
-    def forward(self, hidden_states):
-        hidden, _ = self.fc1(hidden_states)
-        hidden = self.act(hidden)
-        output = self.fc2(hidden)
-        return output
+    def forward(...):
+        attn_metadata =  AttentionMetadata(attn_mask=attention_mask)
+        hidden_states = self.attn(
+            query, # bs, seq_len, num_heads, head_dim
+            key, # bs, seq_len, num_heads, head_dim
+            value, # bs, seq_len, num_heads, head_dim
+            attn_metadata=attn_metadata
+        )
 ```
 
-In this example:
+3. Miscellaneous Replacement
 
-+ Attention uses vLLM-Omni’s optimized attention kernel together with parallel QKV projection and RoPE.
+- Replace diffusers logger by vLLM's logger
 
-+ Linear layers are replaced with column- and row-parallel variants to enable tensor parallelism.
+```diff
+- from diffusers.utils import logging
+- logger = logging.get_logger(__name__)
++ from vllm.logger import init_logger
++ logger = init_logger(__name__)
+```
 
-+ The FFN follows a standard two-layer structure and can be further optimized (e.g., using fused or merged projections) if needed.
+- Replace by vLLM/vLLM-Omni custom Ops (if any)
+
+```diff
++ from vllm.model_executor.layers.layernorm import RMSNorm
++ from vllm_omni.diffusion.layers.rope import RotaryEmbedding
++ from vllm_omni.diffusion.layers.adalayernorm import AdaLayerNorm
+```
+
+- Remove gradient_checkpoint related code (not used in inference)
+
+```diff
+    for index_block, block in enumerate(self.transformer_blocks):
+-        if torch.is_grad_enabled() and self.gradient_checkpointing:
+-            encoder_hidden_states, hidden_states = self._gradient_checkpointing_func(
+-               block,
+-               hidden_states,
+-               encoder_hidden_states,
+-               None,  
+-               temb,
+-               image_rotary_emb,
+-               block_attention_kwargs,
+-               modulate_index,
+-           )
+
+```
+
+So far, you have adapted the diffusers' model implementation to vLLM-Omni, with basic features, like various attention backends.
 
 
-### 1.5 Provide a `_repeated_blocks` in DiT model
-`_repeated_blocks` is the small and frequently-repeated block(s) of a model -- typically a transformer layer.
+### 1.2 Implement the Pipeline class
 
-It's used for torch compile optimizations.
+We would recommend you to first copy the `pipeline_xxx.py` from diffusers to `vllm_omni/diffusion/models/your_model_name/`, and make the following revisions:
+
+1. Remove Diffusers' pipeline inheritance
+
+For example,
+```diff
+- class QwenImagePipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
++ class QwenImagePipeline(nn.Module):
+```
+
+2. Edit the pipeline's `__init__` function
+
+An example pipeline `__init__` function in diffusers is like:
+
 ```python
-_repeated_blocks = ["QwenImageTransformerBlock"]
+class QwenImagePipeline(DiffusionPipeline, QwenImageLoraLoaderMixin):
+    def __init__(
+        self,
+        scheduler: FlowMatchEulerDiscreteScheduler,
+        vae: AutoencoderKLQwenImage,
+        text_encoder: Qwen2_5_VLForConditionalGeneration,
+        tokenizer: Qwen2Tokenizer,
+        transformer: QwenImageTransformer2DModel,
+    ):
+        super().__init__()
+
+        self.register_modules(
+            vae=vae,
+            text_encoder=text_encoder,
+            tokenizer=tokenizer,
+            transformer=transformer,
+            scheduler=scheduler,
+        )
 ```
 
+Since `self.register_modules` is no longer supported after removing `DiffusionPipeline` inheritance, we need to register each module manually:
 
-### 1.6 (Optional) implement sequence parallelism
-vLLM-Omni has a non-intrusive `_sp_plan` that enable sequence parallel without modifying `forward()` logic.
-You can refer to [How to parallelize a new model](../../user_guide/diffusion/parallelism_acceleration.md)
-
-
-### 1.7 (Optional) integrate with Cache-Dit
-vLLM-Omni supports acceleration via [Cache-Dit](../../user_guide/diffusion/cache_dit_acceleration.md). Most models compatible with Diffusers can use Cache-Dit seamlessly. For new models, you can extend support by modifying`cache_dit_backend.py`
-
-## Step 2: Extend OmniDiffusionRequest Fields
-User-provided inputs are ultimately passed to the model’s forward method through OmniDiffusionRequest, so we add the required fields here to support the new model.
 ```python
-prompt: str | list[str] | None = None
-negative_prompt: str | list[str] | None = None
-...
+from diffusers.models.autoencoders.autoencoder_kl_qwenimage import (
+    AutoencoderKLQwenImage,
+)
+from diffusers.schedulers.scheduling_flow_match_euler_discrete import (
+    FlowMatchEulerDiscreteScheduler,
+)
+from transformers import Qwen2_5_VLForConditionalGeneration, Qwen2Tokenizer
+
+from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
+from vllm_omni.diffusion.models.qwen_image.qwen_image_transformer import (
+    QwenImageTransformer2DModel,
+)
+from vllm_omni.diffusion.distributed.utils import get_local_device
+class QwenImagePipeline(nn.Module):
+    def __init__(
+        self,
+        *,
+        od_config: OmniDiffusionConfig,
+        prefix: str = "",
+    ):
+        super().__init__()
+        self.od_config = od_config
+        model = od_config.model
+        self.device = get_local_device()
+        # Check if model is a local path
+        local_files_only = os.path.exists(model)
+
+        self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
+            model, subfolder="scheduler", local_files_only=local_files_only
+        )
+        self.text_encoder = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            model, subfolder="text_encoder", local_files_only=local_files_only
+        )
+        self.vae = AutoencoderKLQwenImage.from_pretrained(model, subfolder="vae", local_files_only=local_files_only).to(
+            self.device
+        )
+        transformer_kwargs = get_transformer_config_kwargs(od_config.tf_model_config, QwenImageTransformer2DModel)
+        self.transformer = QwenImageTransformer2DModel(od_config=od_config, **transformer_kwargs)
+
+        self.tokenizer = Qwen2Tokenizer.from_pretrained(model, subfolder="tokenizer", local_files_only=local_files_only)
+
 ```
 
-## Step 3: Registry
-+ registry diffusion model in registry.py
+This will help the `QwenImagePipeline` to locate the local checkpoint directory and load the weight to each module.
+
+
+3. Edit the pipeline's `__call__` function
+
+First, you need to replace `__call__` function by `forward` function.
+
+```diff
+-    @torch.no_grad()
+-    @replace_example_docstring(EXAMPLE_DOC_STRING)
+-    def __call__(
++    def forward(
+        self,
+        ...
+    ):
+```
+
+Then add the `OmniDiffusionRequest` as its' first argument, and `DiffusionOutput` as its output type:
+```diff
++ from vllm_omni.diffusion.request import OmniDiffusionRequest
++ from vllm_omni.diffusion.data import DiffusionOutput
+    def forward(
+        self,
++       req: OmniDiffusionRequest,
+        prompt: Union[str, List[str]] = None,
+        negative_prompt: Union[str, List[str]] = None,
+        true_cfg_scale: float = 4.0,
+
+-    ):
++    ) -> DiffusionOutput:
+```
+
+`OmniDiffusionRequest` contains the prompts and sampling parameters for the diffusion pipeline execution. All arguments can be passed via `OmniDiffusionRequest`. Therefore, the original arguments to pipeline's `forward` function need special handlings:
+
+For example, prompt will be defined by `req.prompts` if `req.prompts` is not None:
+```python
+prompt = [p if isinstance(p, str) else (p.get("prompt") or "") for p in req.prompts] or prompt
+```
+
+Height and width will be defined by `req.sampling_params` if provided.
+```python
+height = req.sampling_params.height or self.default_sample_size * self.vae_scale_factor
+width = req.sampling_params.width or self.default_sample_size * self.vae_scale_factor
+```
+
+Image postprocessing should be extracted from the pipeline's forward function, and defined in a separate function.
+
+```diff
+    def forward(...):
+        self._current_timestep = None
+        if output_type == "latent":
+            image = latents
+        else:
+            latents = latents / latents_std + latents_mean
+            image = self.vae.decode(latents, return_dict=False)[0][:, :, 0]
+-           processed_image = self.image_processor.postprocess(image, output_type=output_type)
+
+```
+
+This separate function contains the image postprocessing steps, for example:
+```python
+def get_qwen_image_post_process_func(
+    od_config: OmniDiffusionConfig,
+):
+    model_name = od_config.model
+    if os.path.exists(model_name):
+        model_path = model_name
+    else:
+        model_path = download_weights_from_hf_specific(model_name, None, ["*"])
+    vae_config_path = os.path.join(model_path, "vae/config.json")
+    with open(vae_config_path) as f:
+        vae_config = json.load(f)
+        vae_scale_factor = 2 ** len(vae_config["temporal_downsample"]) if "temporal_downsample" in vae_config else 8
+
+    image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor * 2)
+
+    def post_process_func(
+        images: torch.Tensor,
+    ):
+        return image_processor.postprocess(images)
+
+    return post_process_func
+
+```
+
+For image editing pipelines, the `req.prompt` also contains `multi_modal_data` including images, which need pre-processing. Please also extract the pre-processing steps from `forward` function, and define it like `get_qwen_image_edit_pre_process_func`.
+
+Finally, the output of pipeline's `forward` function should be wrapped by:
+
+```diff
+- return QwenImagePipelineOutput(images=image)
++ return DiffusionOutput(output=image)
+```
+
+
+4. Add HF weight helper
+
+In order to run HF weight downloading and loading automatically, you need a helper `DiffusersPipelineLoader` and `AutoWeightsLoader`. An example usage:
+
+```python
+from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
+from vllm.model_executor.models.utils import AutoWeightsLoader
+class QwenImagePipeline(nn.Module):
+    def __init__(
+        self,
+        *,
+        od_config: OmniDiffusionConfig,
+        prefix: str = "",
+    ):
+        super().__init__()
+        self.od_config = od_config
+        self.parallel_config = od_config.parallel_config
+        self.weights_sources = [
+            DiffusersPipelineLoader.ComponentSource(
+                model_or_path=od_config.model,
+                subfolder="transformer",
+                revision=None,
+                prefix="transformer.",
+                fall_back_to_pt=True,
+            )
+        ]
+
+    def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
+        # customize the weight loading behavior
+        loader = AutoWeightsLoader(self)
+        return loader.load_weights(weights)
+
+```
+
+
+Sofar, you have adapted the diffusers' pipeline to vLLM-Omni. Good job!
+
+
+## Step 2: Registry
++ registry diffusion model in `vllm_omni/diffusion/registry.py`
 ```python
 _DIFFUSION_MODELS = {
     # arch:(mod_folder, mod_relname, cls_name)
@@ -164,7 +376,7 @@ _DIFFUSION_MODELS = {
     ...
 }
 ```
-+ registry pre-process get function
++ registry pre-process get function (if any)
 ```python
 _DIFFUSION_PRE_PROCESS_FUNCS = {
     # arch: pre_process_func
@@ -184,7 +396,7 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
 }
 ```
 
-## Step 4: Add an Example Script
+## Step 3: Add an Example Script
 For each newly integrated model, we need to provide examples script under the examples/ to demonstrate how to initialize the pipeline with Omni, pass in user inputs, and generate outputs.
 Key point for writing the example:
 
@@ -200,155 +412,45 @@ Key point for writing the example:
 
     + key diffusion parameters (e.g., inference steps, guidance scale)
 
-    + optional acceleration backends (e.g., Cache-DiT, TeaCache)
-
 + Save or display the generated results so users can validate the integration.
 
-## Step 5: TeaCache Coefficient Estimation (Optional)
 
-If your model supports TeaCache acceleration, you need to estimate the polynomial coefficients for optimal caching performance.
+# Step-by-step-implementation (Advanced)
 
-### 5.1 Add Extractor Function
+This is the advanced adaptation tutorial how to implement an existing model/pipeline with various features, like sequence parallelism, quantization, cache acceleration, compilation, etc.
 
-First, implement an extractor function in `vllm_omni/diffusion/cache/teacache/extractors.py`. The extractor extracts the modulated input and defines how to run transformer blocks:
+## torch.compile
 
-```python
-def extract_your_model_context(
-    module: nn.Module,
-    hidden_states: torch.Tensor,
-    timestep: torch.Tensor,
-    **kwargs: Any,
-) -> CacheContext:
-    # 1. Preprocessing
-    temb = module.time_embed(timestep)
-
-    # 2. Extract modulated input (for cache decision)
-    modulated_input = module.transformer_blocks[0].norm1(hidden_states, temb)
-
-    # 3. Define transformer execution
-    def run_transformer_blocks():
-        h = hidden_states
-        for block in module.transformer_blocks:
-            h = block(h, temb=temb)
-        return (h,)
-
-    # 4. Define postprocessing
-    def postprocess(h):
-        return module.proj_out(module.norm_out(h, temb))
-
-    return CacheContext(
-        modulated_input=modulated_input,
-        hidden_states=hidden_states,
-        encoder_hidden_states=None,
-        temb=temb,
-        run_transformer_blocks=run_transformer_blocks,
-        postprocess=postprocess,
-    )
+`torch.compile` is automatically enabled on `transformer._repeated_blocks`. Please add one single line of code to define it:
+```diff
+class Flux2Transformer2DModel(nn.Module):
++    _repeated_blocks = ["Flux2TransformerBlock", "Flux2SingleTransformerBlock"]
 ```
 
-Register it in `EXTRACTOR_REGISTRY`:
-```python
-EXTRACTOR_REGISTRY = {
-    ...
-    "YourTransformer2DModel": extract_your_model_context,
-}
+## Tensor Parallelism
+
+Tensor parallelism is supported via vLLM interface. For example, in `flux_transformer.py`:
+
+```diff
+from vllm.model_executor.layers.linear import ColumnParallelLinear, QKVParallelLinear, RowParallelLinear
+
 ```
 
-### 5.2 Add Adapter for Coefficient Estimation
+See detailed instruction in
 
-Add an adapter in `vllm_omni/diffusion/cache/teacache/coefficient_estimator.py`:
+## CFG parallelism
 
-```python
-class YourModelAdapter:
-    @staticmethod
-    def load_pipeline(model_path: str, device: str, dtype: torch.dtype) -> Any:
-        # Load your pipeline
-        ...
+See instructions in [how to parallelize a pipeline for CFG parallel](../features/cfg_parallel.md)
 
-    @staticmethod
-    def get_transformer(pipeline: Any) -> tuple[Any, str]:
-        return pipeline.transformer, "YourTransformer2DModel"
+## Sequence Parallelism
 
-    @staticmethod
-    def install_hook(transformer: Any, hook: DataCollectionHook) -> None:
-        registry = HookRegistry.get_or_create(transformer)
-        registry.register_hook(hook._HOOK_NAME, hook)
+See instructions in [How to parallelize a new model for SP](../features/sequence_parallel.md)
 
-_MODEL_ADAPTERS["YourModel"] = YourModelAdapter
-```
+## Patch VAE Parallelism
 
-### 5.3 Run Coefficient Estimation
+coming soon.
 
-Use the provided script to estimate coefficients:
-
-```python
-from vllm_omni.diffusion.cache.teacache.coefficient_estimator import (
-    TeaCacheCoefficientEstimator,
-)
-from datasets import load_dataset
-from tqdm import tqdm
-
-# Load model
-estimator = TeaCacheCoefficientEstimator(
-    model_path="/path/to/model",
-    model_type="Bagel",  # Your model type
-    device="cuda",
-)
-
-# Load prompts (paper suggests ~70 prompts)
-dataset = load_dataset("nateraw/parti-prompts", split="train")
-prompts = dataset["Prompt"][:70]
-
-# Collect data
-for prompt in tqdm(prompts):
-    estimator.collect_from_prompt(prompt, num_inference_steps=50)
-
-# Estimate coefficients
-coeffs = estimator.estimate(poly_order=4)
-print(f"Coefficients: {coeffs}")
-```
-
-### 5.4 Interpreting Coefficient Estimation Results
-
-The estimator outputs statistics and polynomial coefficients. Here's how to interpret them:
-
-**Example Output:**
-```
-Data statistics:
-Count: 48
-Input Diffs (x): min=1.1089e-02, max=5.2555e-02, mean=2.8435e-02
-Output Diffs (y): min=2.8242e-02, max=2.9792e-01, mean=7.0312e-02
-Coefficients: [1333131.29, -168644.23, 7950.51, -163.75, 1.26]
-```
-
-**What to Check:**
-- **Count**: Number of timestep pairs analyzed. Should be at least 30-50 for reliable estimation. Low count suggests insufficient prompts or inference steps.
-- **Input/Output Ranges**: Verify output differences correlate with input differences. If ranges seem unusual, check your prompt diversity.
-- **Coefficient Magnitude**: Extremely large values (>1e8) may indicate numerical instability - try collecting more diverse data.
-
-**Troubleshooting:**
-- If results seem unreliable, try:
-  - Increasing number of prompts (100+ recommended)
-  - Using more diverse prompts from multiple datasets
-  - Adjusting `num_inference_steps` (try 20, 50, 100)
-
-### 5.5 Add Coefficients to Config
-
-Add the estimated coefficients to `vllm_omni/diffusion/cache/teacache/config.py`:
-
-```python
-_MODEL_COEFFICIENTS = {
-    ...
-    "YourTransformer2DModel": [
-        1.04730573e+06,  # a4
-        -1.34150749e+05, # a3
-        6.51517806e+03,  # a2
-        -1.41209108e+02, # a1
-        1.17241808e+00,  # a0
-    ],
-}
-```
-## Step 6: Open a Pull Request
+## What's included in Your Pull Request
 
 When submitting a pull request to add support for a new model, please include the following information in the PR description:
 
@@ -360,11 +462,9 @@ When submitting a pull request to add support for a new model, please include th
 
 + Cache acceleration: check whether the model can be accelerated using Cache-Dit or not.
 
-
 Providing these details helps reviewers evaluate correctness, performance improvements, and parallel scalability of the new model integration.
 
-# Testing
-For comprehensive testing guidelines, please refer to the [Test File Structure and Style Guide](../ci/tests_style.md).
+Test scripts are recommended for good maintainous. If your PR introduces some changes to the internal/external interface, please add test script. For comprehensive testing guidelines, please refer to the [Test File Structure and Style Guide](../ci/tests_style.md).
 
 
 ## Adding a Model Recipe
