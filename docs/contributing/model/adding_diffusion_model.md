@@ -9,7 +9,7 @@ This guide walks you through adding a new diffusion model to vLLM-Omni. We use *
 
 1. [Overview](#overview)
 2. [Directory Structure](#directory-structure)
-3. [Basic Implementation](#basic-implementation) 
+3. [Basic Implementation](#basic-implementation)
 4. [Advanced Features](#advanced-features)
 5. [Troubleshooting](#troubleshooting)
 6. [Pull Request Checklist](#pull-request-checklist)
@@ -31,7 +31,7 @@ vLLM-Omni's diffusion inference follows this architecture:
 **Key Components:**
 
 1. **Request Handling:** User prompts → `OmniDiffusionRequest`
-2. **Diffusion Engine:**  Request → Image preprocessing (Optional) → Pipeline execution -> Image post-processing 
+2. **Diffusion Engine:**  Request → Image preprocessing (Optional) → Pipeline execution -> Image post-processing
 2. **Pipeline Execution:** Request → Encode prompt → Diffusion steps → Vae decode
 
 
@@ -135,7 +135,7 @@ class YourAttentionBlock(nn.Module):
         self.attn = Attention(
             num_heads=self.num_heads,
             head_size=self.head_dim,
-            softmax_scale=1.0 / (self.head_dim ** 0.5), 
+            softmax_scale=1.0 / (self.head_dim ** 0.5),
             causal=False,  # Diffusion models typically use bidirectional attention
             num_kv_heads=self.num_kv_heads,
         )
@@ -151,10 +151,10 @@ class YourAttentionBlock(nn.Module):
 **Key Points:**
 
 - **Attention layer initialization:** Done in `__init__`, not per-forward
-- **Tensor shapes:** vLLM-Omni expects QKV to have `[B, seq, num_heads, head_dim]` shape
+- **Tensor shapes:** vLLM-Omni `Attention` expects QKV to have `[B, seq, num_heads, head_dim]` shape
 - **AttentionMetadata:** Wraps attention mask and other metadata
 
-**Attention backends:** vLLM-Omni automatically selects the attention backend given the env variable `DIFFUSION_ATTENTION_BACKEND`. The default attention backend is `FLASH_ATTN` for diffusion models.
+**Attention backends:** vLLM-Omni automatically selects the attention backend given the environmental variable `DIFFUSION_ATTENTION_BACKEND`. The default attention backend is `FLASH_ATTN` for diffusion models.
 
 #### 1.4: Replace Imports and Utilities
 
@@ -520,7 +520,7 @@ class YourModelPipeline(nn.Module):
 
     def load_weights(self, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
         """
-        Load model weights.
+        Customize the weight loading behavior, such as filter weights name.
 
         Args:
             weights: Iterable of (param_name, param_tensor) tuples
@@ -567,7 +567,7 @@ _DIFFUSION_PRE_PROCESS_FUNCS = {
     # where mod_folder and mod_relname are  defined and mapped using `_DIFFUSION_MODELS` via the `arch` key
     "GlmImagePipeline": "get_glm_image_pre_process_func",
     "QwenImageEditPipeline": "get_qwen_image_edit_pre_process_func",
-    
+
     # Add your model
     "YourModelPipeline": "get_your_model_pre_process_func", # Optional
 }
@@ -608,21 +608,29 @@ __all__ = [
 
 ### Step 4: Add Example Script
 
+
 If your model is one of Text-to-Image, Text-to-Audio, Text-to-Video, Image-to-Image, Image-to-Video models, you can simply try one of the following offline inference scripts to run your model:
 
 | Model Category | Offline Inference Script |
 |---|---|
-| Image-to-Image | `.\examples\offline_inference\image_to_image\image_edit.py` |
-| Image-to-Video | `.\examples\offline_inference\image_to_video\image_to_video.py` |
-| Text-to-Image | `.\examples\offline_inference\text_to_image\text_to_image.py` |
-| Text-to-Audio | `.\examples\offline_inference\text_to_audio\text_to_audio.py` |
-| Text-to-Video | `.\examples\offline_inference\text_to_video\text_to_video.py` |
+| Image-to-Image | `examples/offline_inference/image_to_image/image_edit.py` |
+| Image-to-Video | `examples/offline_inference/image_to_video/image_to_video.py` |
+| Text-to-Image | `examples/offline_inference/text_to_image/text_to_image.py` |
+| Text-to-Audio | `examples/offline_inference/text_to_audio/text_to_audio.py` |
+| Text-to-Video | `examples/offline_inference/text_to_video/text_to_video.py` |
+
+
+If new CLI arguments need to be added, please edit one of the scripts above, and update the example inference script in its corresponding document file, (e.g., `examples/offline_inference/text_to_video/text_to_video.md`).
+
+For online inference examples, please check `examples/online_inference/TASK_NAME` and update the document file accordingly.
+
+---
 
 If your model is an Omni (understanding and generation) model, please follow the steps below.
 
 #### 4.1: Create Example File
 
-Follow the **BAGEL** examples for both offline and online:
+Taking **BAGEL** model as examples for both offline and online:
 
 - Offline: `examples/offline_inference/bagel/`
 - Online: `examples/online_serving/bagel/`
@@ -674,48 +682,17 @@ python openai_chat_client.py --prompt "A cute cat" --modality text2img
 
 Before submitting, thoroughly test your implementation.
 
-#### 5.1: Basic Functionality Test
+#### 5.1: Performance/Speed Check
 
-End-to-end test script is optional. Please the important model's e2e test in CI.
+Manually compare **latency/throughput** and **output quality** against a Diffusers baseline.
 
-```python
-# tests/e2e/offline_inference/test_your_model.py
-
-import pytest
-import torch
-from PIL import Image
-
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+For a fair comparison, keep the same **prompt**, **seed**, **resolution**, **num_inference_steps**, and **guidance settings**, and run multiple trials to reduce randomness. Record the results (and your hardware / driver / CUDA versions) in your PR description.
 
 
-@pytest.mark.parametrize("model", ["your-org/your-model-name"])
-def test_your_model_text_to_image(model):
-    """Test basic text-to-image generation."""
-    omni = Omni(model=model)
+#### 5.2 Functionality Check in CI
 
-    outputs = omni.generate(
-        prompts=["a cat"],
-        sampling_params=OmniDiffusionSamplingParams(
-            num_inference_steps=20,
-            height=512,
-            width=512,
-            seed=42,
-        ),
-    )
-
-    assert len(outputs) == 1
-    assert len(outputs[0].outputs) == 1
-    image = outputs[0].outputs[0]
-    assert isinstance(image, Image.Image)
-    assert image.size == (512, 512)
-
-```
-
-#### 5.2: Performance/Speed Check
-
-Manually compare **latency/throughput**, **peak GPU memory**, and **output quality** against a Diffusers baseline.
-For a fair comparison, keep the same **prompt**, **seed**, **resolution**, **num_inference_steps**, and **guidance settings**, and run multiple trials to reduce randomness. Record the results (and your hardware / driver / CUDA versions) in the PR description.
+To ensure project maintainability and sustainable development, we encourage contributors to submit test code (unit tests, system tests, or end-to-end tests) alongside their code changes.
+For comprehensive testing guidelines, please refer to the [Test File Structure and Style Guide](../ci/tests_style.md).
 
 ---
 
@@ -743,32 +720,12 @@ vLLM-Omni automatically compiles blocks in `_repeated_blocks` when `torch.compil
 
 ### Tensor Parallelism
 
-Use vLLM's parallel linear layers:
+See detailed guide: [How to add Tensor Parallel support](../features/tensor_parallel.md)
 
-```python
-from vllm.model_executor.layers.linear import (
-    ColumnParallelLinear,  # Split output dimension
-    RowParallelLinear,     # Split input dimension
-    QKVParallelLinear,     # Split Q, K, V heads
-)
+**Quick setup:**
 
-class YourAttentionBlock(nn.Module):
-    def __init__(self, hidden_size, num_heads, ...):
-        super().__init__()
-
-        # Replace nn.Linear with parallel versions
-        self.to_qkv = QKVParallelLinear(
-            hidden_size,
-            3 * hidden_size,  # Q, K, V concatenated
-            bias=True,
-        )
-
-        self.to_out = RowParallelLinear(
-            hidden_size,
-            hidden_size,
-            bias=True,
-        )
-```
+1. Replace Linear layers by `ParallelLinear` layers in vLLM.
+2. Inherit `CFGParallelMixin` in your pipeline class
 
 **Usage:** Set `tensor_parallel_size` when initializing:
 ```python
@@ -777,21 +734,31 @@ omni = Omni(model="your-model", tensor_parallel_size=2)
 
 ### CFG Parallelism
 
-See detailed guide: [How to add CFG-Parallel support](../features/cfg_parallel.md)
+See detailed guide: [How to add CFG-Parallel support](..features/cfg_parallel.md)
 
 **Quick setup:**
 
 1. Implement `diffuse()` method
 2. Inherit `CFGParallelMixin` in your pipeline class
 
+**Usage:** Set `cfg_parallel_size` when initializing:
+```python
+omni = Omni(model="your-model", cfg_parallel_size=2)
+```
+
 ### Sequence Parallelism
 
-See detailed guide: [How to add Sequence Parallel support](../features/sequence_parallel.md)
+See detailed guide: [How to add Sequence Parallel support](..features/sequence_parallel.md)
 
 **Quick setup:**
 
 1. Add `_sp_plan` class attribute to transformer
 2. Specify where to shard/gather tensors
+
+**Usage:** Set `ulysses_degree` and `ring_degree` when initializing:
+```python
+omni = Omni(model="your-model", ulysses_degree=2, ring_degree=2)
+```
 
 ### Cache Acceleration
 
@@ -805,14 +772,36 @@ See detailed guide: [How to add TeaCache support](../features/teacache.md)
 2. Register in `EXTRACTOR_REGISTRY`
 3. Add polynomial coefficients (optional)
 
+**Usage:** Set `cache_backend` and `cache_config` when initializing:
+```python
+omni = Omni(model="your-model",
+    cache_backend="tea_cache",
+    cache_config={"rel_l1_thresh": 0.2}
+)
+
+```
+
+
 #### Cache-DiT
 
 See detailed guide: [How to add Cache-DiT support](../features/cache_dit.md)
 
 **Quick setup:**
 
-- For standard models: Works automatically!
-- For complex architectures: Write custom enabler
+- For standard models: Works automatically
+- For complex architectures: Write custom cache config
+
+**Usage:** Set `cache_backend` and `cache_config` when initializing:
+```python
+omni = Omni(model="your-model",  
+    cache_backend="cache_dit",
+    cache_config={
+        "Fn_compute_blocks": 1,
+        "Bn_compute_blocks": 0,
+        "max_warmup_steps": 4,
+    }
+)
+```
 
 ---
 
@@ -910,9 +899,16 @@ When submitting a PR to add your model, include:
 
 - ✅ Example script in `examples/`
 - ✅ Test file in `tests/e2e/` (optional)
-- ✅ README documentation (optional)
+- ✅ README documentation (required)
 
-### 3. Verification Results
+### 3. Documentation Updates
+
+- ✅ Add model to supported models table in `docs/models/supported_models.md`
+- ✅ If supporting acceleration features (e.g., sequence parallelism, CFG parallel), update acceleration feature tables in:
+  - `docs/user_guide/diffusion_acceleration.md`
+  - `docs/user_guide/diffusion/parallelism_acceleration.md`
+
+### 4. Verification Results
 
 Include in PR description:
 
@@ -926,27 +922,25 @@ Visual similarity: ✅ Identical / ⚠️ Minor differences / ❌ Different
 
 **Performance Benchmark:**
 ```
-Hardware: A100 40GB
 Batch size: 1
 Inference steps: 50
-Image size: 512x512
+Image size:  1024x1024
 
 Diffusers: xxx s
 vLLM-Omni: xxx s
 ```
 
-**Parallelism Support:**
+**Parallelism Support (Optional):**
 ```
 ✅ Tensor Parallel: Tested with tp_size=[1, 2, 4]
 ✅ CFG Parallel: Tested with cfg_parallel_size=2
 ✅ Sequence Parallel: Tested with sp_size=[1, 2]
-⚠️ Patch VAE Parallel: Not yet supported
 ```
 
-**Cache Acceleration:**
+**Cache Acceleration (Optional):**
 ```
-✅ TeaCache: Supported, 1.8x speedup at rel_l1_thresh=0.2
-✅ Cache-DiT: Supported, 2.3x speedup with DBCache
+✅ TeaCache: Supported, xx speedup at rel_l1_thresh=0.2
+✅ Cache-DiT: Supported, xx speedup with DBCache
 ```
 
 ### 4. Documentation
@@ -954,13 +948,33 @@ vLLM-Omni: xxx s
 - ✅ Model-specific documentation (if needed)
 - ✅ Usage examples
 
-### 5. Model Recipe (Optional)
+## 5. Model Recipe
 
-Add a model recipe to [vllm-project/recipes](https://github.com/vllm-project/recipes) showing:
-- Installation instructions
-- Basic usage
-- Advanced features
-- Performance tips
+After implementing and testing your model, please add a model recipe to the [vllm-project/recipes](https://github.com/vllm-project/recipes) repository. This helps other users understand how to use your model with vLLM-Omni.
+
+### What to Include
+
+Your recipe should include:
+
+1. **Model Overview**: Brief description of the model and its capabilities
+2. **Installation Instructions**: Step-by-step setup instructions including:
+   - Installing vllm-omni and dependencies
+   - Installing any additional required packages (e.g., xformers, diffusers)
+   - Any version requirements
+3. **Usage Examples**: Command-line examples demonstrating how to run the model
+4. **Configuration Details**: Important configuration parameters and their meanings
+
+### Example
+
+For reference, see the [LongCat recipe example](https://github.com/vllm-project/recipes/pull/179) which demonstrates the expected format and structure.
+
+### Recipe Location
+
+Create your recipe file in the appropriate directory structure:
+- For organization-specific models: `OrganizationName/ModelName.md`
+- For general models: `ModelName.md`
+
+The recipe should be a Markdown file that provides clear, reproducible instructions for users to get started with your model.
 
 ---
 
@@ -970,11 +984,8 @@ Study these complete examples:
 
 | Model | Architecture | Key Features | Files |
 |-------|--------------|--------------|-------|
-| **Qwen-Image** | Dual-stream transformer | CFG-Parallel, SP, TeaCache | `vllm_omni/diffusion/models/qwen_image/` |
-| **LongCat-Image** | FLUX-like MMDiT | Dual block lists, SP, Cache-DiT | `vllm_omni/diffusion/models/longcat_image/` |
-| **Wan2.2** | Video transformer | Dual transformers, SP, temporal attention | `vllm_omni/diffusion/models/wan2_2/` |
-| **Flux** | Image transformer | Single-stream, SP | `vllm_omni/diffusion/models/flux/` |
-| **Z-Image** | Unified sequence | Concatenated input, SP | `vllm_omni/diffusion/models/z_image/` |
+| **Qwen-Image** | Dual-stream transformer | CFG-Parallel, SP, TP, Cache | `vllm_omni/diffusion/models/qwen_image/` |
+| **Wan2.2** | Video transformer | Dual transformers, SP, CFG-Parallel | `vllm_omni/diffusion/models/wan2_2/` |
 
 ---
 
