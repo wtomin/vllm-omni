@@ -716,7 +716,7 @@ omni = Omni(model="your-model", tensor_parallel_size=2)
 
 ### CFG Parallelism
 
-See detailed guide: [How to add CFG-Parallel support](..features/cfg_parallel.md)
+See detailed guide: [How to add CFG-Parallel support](../features/cfg_parallel.md)
 
 **Quick setup:**
 
@@ -730,7 +730,7 @@ omni = Omni(model="your-model", cfg_parallel_size=2)
 
 ### Sequence Parallelism
 
-See detailed guide: [How to add Sequence Parallel support](..features/sequence_parallel.md)
+See detailed guide: [How to add Sequence Parallel support](../features/sequence_parallel.md)
 
 **Quick setup:**
 
@@ -796,6 +796,7 @@ omni = Omni(model="your-model",
 **Symptoms:** `ModuleNotFoundError` or `ImportError` when calling `Omni(model="your-model")`
 
 **Causes:**
+
 1. Model not registered in `registry.py`
 2. Wrong class name in registry
 3. Missing `__init__.py` exports
@@ -808,6 +809,7 @@ omni = Omni(model="your-model",
 **Cause:** Incorrect tensor reshaping for vLLM-Omni's attention interface
 
 **Solution:** Ensure correct shapes:
+
 ```python
 # vLLM-Omni expects: [batch, seq_len, num_heads, head_dim]
 query = query.view(batch_size, seq_len, self.num_heads, self.head_dim)
@@ -825,6 +827,7 @@ hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
 **Symptoms:** Generated images look different from Diffusers
 
 **Causes:**
+
 1. Attention backend differences (FlashAttention vs PyTorch SDPA)
 2. Missing normalization or scaling
 
@@ -833,6 +836,7 @@ hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
 **Symptoms:** CUDA out of memory errors
 
 **Solutions:**
+
 1. **Reduce batch size:**
    ```python
    omni.generate(prompts=[...], max_batch_size=2)
