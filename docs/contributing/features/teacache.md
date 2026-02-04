@@ -253,93 +253,9 @@ _MODEL_COEFFICIENTS = {
 
 ---
 
-## Complete Example: Adding Support for a New Model
 
-Here's a minimal extractor for a hypothetical single-stream model:
 
-```python
-def extract_mymodel_context(
-    module: nn.Module,
-    hidden_states: torch.Tensor,
-    timestep: torch.Tensor,
-    **kwargs: Any,
-) -> CacheContext:
-    """Extract cache context for MyModel."""
-    from diffusers.models.modeling_outputs import Transformer2DModelOutput
-
-    # Step 1: Preprocessing
-    hidden_states = module.patch_embed(hidden_states)
-    temb = module.time_embed(timestep)
-
-    # Step 2: Extract modulated input from first block
-    block = module.transformer_blocks[0]
-    modulated = block.norm(hidden_states) * block.scale(temb)
-
-    # Step 3: Define transformer execution
-    def run_transformer_blocks():
-        h = hidden_states
-        for block in module.transformer_blocks:
-            h = block(h, temb=temb)
-        return (h,)
-
-    # Step 4: Define postprocessing
-    def postprocess(h):
-        h = module.norm_out(h)
-        output = module.proj_out(h)
-        return Transformer2DModelOutput(sample=output)
-
-    # Step 5: Return context
-    return CacheContext(
-        modulated_input=modulated,
-        hidden_states=hidden_states,
-        encoder_hidden_states=None,  # Single-stream model
-        temb=temb,
-        run_transformer_blocks=run_transformer_blocks,
-        postprocess=postprocess,
-    )
-```
-
-Then register it:
-
-```python
-# In extractors.py
-EXTRACTOR_REGISTRY["MyModelTransformer2DModel"] = extract_mymodel_context
-```
-
-And add coefficients:
-
-```python
-# In config.py
-_MODEL_COEFFICIENTS["MyModelTransformer2DModel"] = [
-    4.98651651e02, -2.83781631e02, 5.58554382e01, -3.82021401e00, 2.64230861e-01
-]
-```
-
----
-
-## Testing
-
-After adding support, test with:
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-omni = Omni(
-    model="your-model-name",
-    cache_backend="tea_cache",
-    cache_config={"rel_l1_thresh": 0.2}
-)
-
-images = omni.generate(
-    "a beautiful landscape",
-    OmniDiffusionSamplingParams(num_inference_steps=50),
-)
-```
-
----
-
-## Coefficient Estimation (Optional but Recommended)
+## Coefficient Estimation
 
 While you can start with coefficients from a similar model architecture, estimating custom coefficients for your specific model typically improves TeaCache performance. This section shows how to estimate optimal polynomial coefficients.
 
@@ -716,34 +632,28 @@ if __name__ == "__main__":
 
 ---
 
-## Common Patterns
 
-### Single-Stream Transformer (e.g., Flux)
+## Testing
 
-```python
-- modulated_input: Extracted from first block after norm + modulation
-- hidden_states: Main image/latent tensor
-- encoder_hidden_states: None
-- run_transformer_blocks: Returns (hidden_states,)
-```
-
-### Dual-Stream Transformer (e.g., Qwen-Image)
+After adding teacache support, test with:
 
 ```python
-- modulated_input: Image stream modulated input from first block
-- hidden_states: Image/latent tensor
-- encoder_hidden_states: Text encoder outputs
-- run_transformer_blocks: Returns (hidden_states, encoder_hidden_states)
+from vllm_omni import Omni
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+
+omni = Omni(
+    model="your-model-name",
+    cache_backend="tea_cache",
+    cache_config={"rel_l1_thresh": 0.2}
+)
+
+images = omni.generate(
+    "a beautiful landscape",
+    OmniDiffusionSamplingParams(num_inference_steps=50),
+)
 ```
 
-### Unified Sequence Transformer (e.g., Z-Image)
-
-```python
-- modulated_input: Unified sequence modulated input from first block
-- hidden_states: Combined image + text sequence
-- encoder_hidden_states: None (unified processing)
-- run_transformer_blocks: Returns (unified_sequence,)
-```
+See more detailed examples in [user guide for teacache](../../user_guide/diffusion/teacache.md).
 
 ---
 
@@ -780,8 +690,7 @@ if __name__ == "__main__":
 See these files for complete examples:
 
 - **Dual-stream (Qwen-Image):** `vllm_omni/diffusion/cache/teacache/extractors.py::extract_qwen_context`
-- **Unified sequence (Z-Image):** `vllm_omni/diffusion/cache/teacache/extractors.py::extract_zimage_context`
-- **Language model (Bagel):** `vllm_omni/diffusion/cache/teacache/extractors.py::extract_bagel_context`
+- **Omni model (Bagel):** `vllm_omni/diffusion/cache/teacache/extractors.py::extract_bagel_context`
 
 ---
 
@@ -793,5 +702,3 @@ Adding TeaCache support requires:
 2. ✅ Register in `EXTRACTOR_REGISTRY`
 3. ✅ Add model coefficients to `_MODEL_COEFFICIENTS`
 4. ✅ Test with `cache_backend="tea_cache"`
-
-No model code changes needed! The hook system handles everything else automatically.
