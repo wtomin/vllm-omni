@@ -15,11 +15,10 @@ In standard Classifier-Free Guidance, each diffusion step requires two forward p
 
 ---
 
-## Architecture
+### Architecture
 
 vLLM-omni provides `CFGParallelMixin` that encapsulates all CFG parallel logic. Pipelines inherit from this mixin and implement a `diffuse()` method that orchestrates the denoising loop.
 
-### CFGParallelMixin Key Methods
 
 | Method | Purpose | Automatic Behavior |
 |--------|---------|-------------------|
@@ -28,6 +27,34 @@ vLLM-omni provides `CFGParallelMixin` that encapsulates all CFG parallel logic. 
 | `combine_cfg_noise()` | Combine positive/negative | Applies CFG formula with optional normalization |
 | `predict_noise()` | Forward pass wrapper | Override for custom transformer calls |
 | `cfg_normalize_function()` | Normalize CFG output | Override for custom normalization |
+
+---
+
+### How It Works
+
+`predict_noise_maybe_with_cfg()` automatically detects and switches between two execution modes:
+
+- **CFG-Parallel mode** (when `cfg_world_size > 1`):
+  - Rank 0 computes positive prompt prediction
+  - Rank 1 computes negative prompt prediction
+  - Results are gathered via `all_gather()`
+  - Combined on rank 0 using CFG formula
+
+- **Sequential mode** (when `cfg_world_size == 1`):
+  - Single rank computes both positive and negative predictions
+  - Directly combines them with CFG formula
+
+
+`scheduler_step_maybe_with_cfg()` ensures consistent latent states across all ranks:
+
+- **CFG-Parallel mode**:
+  - Only rank 0 performs the scheduler step (applies noise prediction to update latents)
+  - Updated latents are broadcast to all other ranks via `broadcast()`
+  - All ranks maintain synchronized latent states for the next iteration
+
+- **Sequential mode**:
+  - Single rank directly performs the scheduler step
+  - No synchronization needed
 
 ---
 
@@ -157,38 +184,6 @@ class QwenImagePipeline(QwenImageCFGParallelMixin, DiffusionPipeline):
 
 ```
 
-
-## How It Works
-
-### Automatic Mode Detection
-
-`predict_noise_maybe_with_cfg()` automatically detects and switches between two execution modes:
-
-- **CFG-Parallel mode** (when `cfg_world_size > 1`):
-  - Rank 0 computes positive prompt prediction
-  - Rank 1 computes negative prompt prediction
-  - Results are gathered via `all_gather()`
-  - Combined on rank 0 using CFG formula
-
-- **Sequential mode** (when `cfg_world_size == 1`):
-  - Single rank computes both positive and negative predictions
-  - Directly combines them with CFG formula
-
-### Scheduler Synchronization
-
-`scheduler_step_maybe_with_cfg()` ensures consistent latent states across all ranks:
-
-- **CFG-Parallel mode**:
-  - Only rank 0 performs the scheduler step (applies noise prediction to update latents)
-  - Updated latents are broadcast to all other ranks via `broadcast()`
-  - All ranks maintain synchronized latent states for the next iteration
-
-- **Sequential mode**:
-  - Single rank directly performs the scheduler step
-  - No synchronization needed
-
----
-
 ## Customization
 
 ### Override `predict_noise()` for Custom Transformer Calls
@@ -237,6 +232,24 @@ class LongCatImagePipeline(nn.Module, CFGParallelMixin):
 ```
 
 
+
+## Testing
+
+
+Taking text-to-image as an example:
+```bash
+cd examples/offline_inference/text_to_image
+python text_to_image.py \
+    --model Your-org/your-model \
+    --prompt "a cup of coffee on the table" \
+    --negative_prompt "ugly, unclear" \
+    --cfg_scale 4.0 \
+    --num_inference_steps 50 \
+    --output "cfg_enabled.png" \
+    --cfg_parallel_size 2
+```
+Please record the "e2e_time_ms" in the log and the generated result, and compare them with the results of CFG-Parallel not enabled. Please record the comparison results in your PR.
+
 ## Troubleshooting
 
 ### Issue: CFG parallel not activating
@@ -268,17 +281,6 @@ class LongCatImagePipeline(nn.Module, CFGParallelMixin):
        negative_prompt="",  # Must provide (even if empty)
        guidance_scale=3.5,   # Must be > 1.0
    )
-   ```
-
-3. **Mixin methods not called:**
-
-   **Solution:** Ensure pipeline calls `predict_noise_maybe_with_cfg()` instead of direct transformer calls:
-   ```python
-   # ❌ BAD: Direct transformer call
-   noise_pred = self.transformer(latents, ...)
-
-   # ✅ GOOD: Use mixin method
-   noise_pred = self.predict_noise_maybe_with_cfg(...)
    ```
 
 
