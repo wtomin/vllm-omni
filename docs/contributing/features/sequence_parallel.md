@@ -13,9 +13,10 @@ Sequence Parallel distributes long sequences across multiple GPUs, enabling gene
 **Terminology Note:** Our "Sequence Parallelism" (SP) corresponds to "Context Parallelism" (CP) in the [diffusers library](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/_modeling_parallel.py). We use "Sequence Parallelism" to align with vLLM-Omni's terminology.
 
 Diffusion transformers process long sequences of image patches or video frames. For high-resolution generation, these sequences can become very large. Enabling SP allows each GPU processes only a portion of the sequence, with attention mechanisms (Ulysses/Ring) handling cross-GPU communication transparently.
+
 ---
 
-## Architecture: Two Approaches
+### Architecture: Two Approaches
 
 ### Approach 1: Non-Intrusive `_sp_plan` (Recommended)
 
@@ -218,7 +219,7 @@ class TransformerWithRoPE(nn.Module):
 
 ---
 
-## Test
+## Testing
 
 After implementing Sequence Parallel support, thoroughly test your implementation to ensure correctness and performance across different configurations.
 

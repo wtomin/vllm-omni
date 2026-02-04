@@ -163,6 +163,22 @@ For correct TP operation, these dimensions **must be divisible** by `tensor_para
 | `num_heads` | Heads sharded by QKVParallelLinear | `num_heads=30, tp=4` ❌ (30 % 4 ≠ 0) |
 | `num_kv_heads` | KV heads sharded by QKVParallelLinear | `num_kv_heads=30, tp=4` ❌ (30 % 4 ≠ 0) |
 
+## Testing
+
+Taking text-to-image as an example:
+```bash
+cd examples/offline_inference/text_to_image
+python text_to_image.py \
+    --model Your-org/your-model \
+    --prompt "a cup of coffee on the table" \
+    --negative_prompt "ugly, unclear" \
+    --cfg_scale 4.0 \
+    --num_inference_steps 50 \
+    --output "tp_enabled.png" \
+    --tensor_parallel_size 2
+```
+Please record the "e2e_time_ms" in the log and the generated result, and compare them with the results of Tensor-Parallel not enabled. Please record the comparison results in your PR.
+
 
 ## Troubleshooting
 
