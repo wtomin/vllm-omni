@@ -13,18 +13,6 @@ In standard Classifier-Free Guidance, each diffusion step requires two forward p
 1. **Positive/Conditional**: Guided by the text prompt
 2. **Negative/Unconditional**: Typically using empty or negative prompt
 
-These predictions are combined with:
-```
-noise_pred = negative_pred + cfg_scale * (positive_pred - negative_pred)
-```
-
-**Problem:** Sequential execution wastes compute resources - the GPU must run both passes one after another.
-
-**Solution:** CFG-Parallel distributes these two passes across different GPU ranks:
-- **Rank 0**: Computes positive prediction
-- **Rank 1**: Computes negative prediction
-- Results are gathered and combined on Rank 0
-
 ---
 
 ## Architecture
@@ -130,7 +118,8 @@ class QwenImageCFGParallelMixin(CFGParallelMixin):
 
 **Key Points:**
 - Separate `positive_kwargs` and `negative_kwargs` for the two forward passes
-- Pass both to `predict_noise_maybe_with_cfg()` which handles distribution
+- Pass both `positive_kwargs` and `negative_kwargs` to `predict_noise_maybe_with_cfg()`
+- For image editing pipelines, `self.predict_noise_maybe_with_cfg(..., output_slice=image_seq_len)` is required. If `output_slice` is set, slice output to `[:, :output_slice]` to extract the generative image.
 - Use `scheduler_step_maybe_with_cfg()` for synchronized latent updates
 
 ### Step 2: Inherit Mixin in Pipeline Class
@@ -151,26 +140,8 @@ class QwenImagePipeline(QwenImageCFGParallelMixin, DiffusionPipeline):
         num_inference_steps: int = 50,
         **kwargs,
     ):
-        # Encode prompts
-        prompt_embeds, prompt_embeds_mask = self.encode_prompt(prompt)
-
-        if negative_prompt or guidance_scale > 1.0:
-            negative_embeds, negative_mask = self.encode_prompt(
-                negative_prompt or ""
-            )
-            do_true_cfg = True
-        else:
-            negative_embeds = None
-            negative_mask = None
-            do_true_cfg = False
-
-        # Initialize latents
-        latents = self.prepare_latents(...)
-
-        # Get timesteps
-        self.scheduler.set_timesteps(num_inference_steps)
-        timesteps = self.scheduler.timesteps
-
+        # Encode prompts, Initialize latents, Get timesteps
+        ...
         # Run diffusion loop (calls the mixin's diffuse method)
         latents = self.diffuse(
             prompt_embeds=prompt_embeds,
@@ -184,121 +155,37 @@ class QwenImagePipeline(QwenImageCFGParallelMixin, DiffusionPipeline):
             ...
         )
 
-        # Decode latents
-        images = self.vae.decode(latents)
-        return images
 ```
 
-### Step 3: Handle Image Editing Pipelines (Optional)
-
-For image editing pipelines that concatenate condition latents with noise latents, use the `output_slice` parameter.
-
-```python
-class QwenImageEditPipeline(QwenImageCFGParallelMixin, DiffusionPipeline):
-    def diffuse(
-        self,
-        latents: torch.Tensor,
-        image_latents: torch.Tensor,  # Condition image latents
-        **kwargs,
-    ) -> torch.Tensor:
-        for i, t in enumerate(timesteps):
-            # Concatenate noise latents with condition latents
-            latent_model_input = torch.cat([latents, image_latents], dim=1)
-
-            positive_kwargs = {
-                "hidden_states": latent_model_input,  # Concatenated input
-                ...
-            }
-            negative_kwargs = {
-                "hidden_states": latent_model_input,  # Same for negative
-                ...
-            }
-
-            # Specify output_slice to remove condition latents from output
-            noise_pred = self.predict_noise_maybe_with_cfg(
-                ...,
-                output_slice=latents.size(1),  # Only keep noise prediction
-            )
-
-            # Step only the noise latents (not condition latents)
-            latents = self.scheduler_step_maybe_with_cfg(
-                noise_pred, t, latents, do_true_cfg
-            )
-
-        return latents
-```
-
----
 
 ## How It Works
 
 ### Automatic Mode Detection
 
-`predict_noise_maybe_with_cfg()` automatically detects the execution mode:
+`predict_noise_maybe_with_cfg()` automatically detects and switches between two execution modes:
 
-```python
-# Check if CFG parallel is enabled
-cfg_parallel_ready = (
-    do_true_cfg and
-    get_classifier_free_guidance_world_size() > 1
-)
+- **CFG-Parallel mode** (when `cfg_world_size > 1`):
+  - Rank 0 computes positive prompt prediction
+  - Rank 1 computes negative prompt prediction
+  - Results are gathered via `all_gather()`
+  - Combined on rank 0 using CFG formula
 
-if cfg_parallel_ready:
-    # CFG-Parallel mode: distribute computation
-    cfg_rank = get_classifier_free_guidance_rank()
-
-    if cfg_rank == 0:
-        local_pred = self.predict_noise(**positive_kwargs)  # Rank 0: positive
-    else:
-        local_pred = self.predict_noise(**negative_kwargs)  # Rank 1: negative
-
-    # Gather predictions from both ranks
-    gathered = cfg_group.all_gather(local_pred, separate_tensors=True)
-
-    # Combine on rank 0
-    if cfg_rank == 0:
-        noise_pred = self.combine_cfg_noise(
-            gathered[0],  # positive
-            gathered[1],  # negative
-            true_cfg_scale,
-            cfg_normalize
-        )
-        return noise_pred
-    else:
-        return None  # Rank 1 doesn't need the result
-else:
-    # Sequential mode: compute both on same rank
-    positive_pred = self.predict_noise(**positive_kwargs)
-    negative_pred = self.predict_noise(**negative_kwargs)
-    return self.combine_cfg_noise(positive_pred, negative_pred, ...)
-```
+- **Sequential mode** (when `cfg_world_size == 1`):
+  - Single rank computes both positive and negative predictions
+  - Directly combines them with CFG formula
 
 ### Scheduler Synchronization
 
-`scheduler_step_maybe_with_cfg()` ensures all ranks have consistent latents:
+`scheduler_step_maybe_with_cfg()` ensures consistent latent states across all ranks:
 
-```python
-cfg_parallel_ready = (
-    do_true_cfg and
-    get_classifier_free_guidance_world_size() > 1
-)
+- **CFG-Parallel mode**:
+  - Only rank 0 performs the scheduler step (applies noise prediction to update latents)
+  - Updated latents are broadcast to all other ranks via `broadcast()`
+  - All ranks maintain synchronized latent states for the next iteration
 
-if cfg_parallel_ready:
-    cfg_rank = get_classifier_free_guidance_rank()
-
-    # Only rank 0 computes scheduler step
-    if cfg_rank == 0:
-        latents = self.scheduler_step(noise_pred, t, latents)
-
-    # Broadcast updated latents to all ranks
-    latents = latents.contiguous()
-    cfg_group.broadcast(latents, src=0)
-else:
-    # Sequential mode: directly step
-    latents = self.scheduler_step(noise_pred, t, latents)
-
-return latents
-```
+- **Sequential mode**:
+  - Single rank directly performs the scheduler step
+  - No synchronization needed
 
 ---
 
@@ -306,191 +193,49 @@ return latents
 
 ### Override `predict_noise()` for Custom Transformer Calls
 
-If your transformer requires custom preprocessing or postprocessing:
+If your transformer requires custom prediction function, you can rewrite `predict_noise` function. Taking wan2.2 as an example, which as two transformer models.
 
 ```python
-class MyPipelineCFGMixin(CFGParallelMixin):
-    def predict_noise(self, hidden_states, **kwargs):
-        """Custom transformer forward pass."""
-        # Preprocess inputs
-        hidden_states = self.preprocess(hidden_states)
+class Wan22Pipeline(nn.Module, CFGParallelMixin):
+    def predict_noise(self, current_model: nn.Module | None = None, **kwargs: Any) -> torch.Tensor:
+        """
+        Forward pass through transformer to predict noise.
 
-        # Call transformer
-        output = self.transformer(hidden_states, **kwargs)
+        Args:
+            current_model: The transformer model to use (transformer or transformer_2)
+            **kwargs: Arguments to pass to the transformer
 
-        # Extract noise prediction (format varies by model)
-        if isinstance(output, tuple):
-            noise_pred = output[0]
-        else:
-            noise_pred = output.sample
-
-        # Postprocess outputs
-        noise_pred = self.postprocess(noise_pred)
-
-        return noise_pred
+        Returns:
+            Predicted noise tensor
+        """
+        if current_model is None:
+            current_model = self.transformer
+        return current_model(**kwargs)[0]
 ```
 
 ### Override `cfg_normalize_function()` for Custom Normalization
 
-Some models benefit from different normalization strategies:
+Some models has its own normalization function. Taking LongCat Image model as an example
 
 ```python
-class MyPipelineCFGMixin(CFGParallelMixin):
-    def cfg_normalize_function(self, noise_pred, comb_pred):
+class LongCatImagePipeline(nn.Module, CFGParallelMixin):
+    def cfg_normalize_function(self, noise_pred, comb_pred, cfg_renorm_min=0.0):
         """
-        Custom CFG normalization.
-
-        Default implementation rescales combined prediction to match
-        the norm of the positive prediction, which stabilizes generation.
+        Normalize the combined noise prediction.
         """
-        # Option 1: Default norm-based rescaling
         cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
         noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
-        return comb_pred * (cond_norm / noise_norm)
+        scale = (cond_norm / (noise_norm + 1e-8)).clamp(min=cfg_renorm_min, max=1.0)
+        noise_pred = comb_pred * scale
+        return noise_pred
 
-        # Option 2: No normalization (return as-is)
-        # return comb_pred
-
-        # Option 3: Custom rescaling
-        # return comb_pred * self.cfg_rescale_factor
+        # The original cfg_normalize_function function in CFGParallelMixin
+        # cond_norm = torch.norm(noise_pred, dim=-1, keepdim=True)
+        # noise_norm = torch.norm(comb_pred, dim=-1, keepdim=True)
+        # noise_pred = comb_pred * (cond_norm / noise_norm)
+        # return noise_pred
 ```
 
-### Validate CFG Configuration
-
-Add validation to ensure CFG parallel is correctly configured:
-
-```python
-class MyPipelineCFGMixin(CFGParallelMixin):
-    def check_cfg_parallel_validity(
-        self,
-        true_cfg_scale: float,
-        has_neg_prompt: bool
-    ) -> bool:
-        """
-        Validate CFG parallel configuration.
-
-        Args:
-            true_cfg_scale: CFG scale (must be > 1 for CFG to work)
-            has_neg_prompt: Whether negative prompt is provided
-
-        Returns:
-            True if configuration is valid, False otherwise
-        """
-        if get_classifier_free_guidance_world_size() == 1:
-            return True  # Not using CFG parallel
-
-        if true_cfg_scale <= 1:
-            logger.warning(
-                "CFG parallel requires true_cfg_scale > 1, "
-                f"got {true_cfg_scale}"
-            )
-            return False
-
-        if not has_neg_prompt:
-            logger.warning(
-                "CFG parallel requires negative prompt, but none provided"
-            )
-            return False
-
-        return True
-```
-
----
-
-## Common Patterns
-
-### Pattern 1: Dual-Stream Transformer (Text + Image)
-
-**Models:** Qwen-Image, SD3, FLUX
-
-```python
-class DualStreamCFGMixin(CFGParallelMixin):
-    def diffuse(self, latents, text_embeds, negative_text_embeds, ...):
-        for t in timesteps:
-            positive_kwargs = {
-                "hidden_states": latents,           # Image stream
-                "encoder_hidden_states": text_embeds,  # Text stream
-                ...
-            }
-            negative_kwargs = {
-                "hidden_states": latents,
-                "encoder_hidden_states": negative_text_embeds,
-                ...
-            }
-
-            noise_pred = self.predict_noise_maybe_with_cfg(...)
-            latents = self.scheduler_step_maybe_with_cfg(...)
-
-        return latents
-```
-
-### Pattern 2: Single-Stream Transformer (Unified Sequence)
-
-**Models:** Z-Image (image + text concatenated)
-
-```python
-class SingleStreamCFGMixin(CFGParallelMixin):
-    def diffuse(self, unified_latents, negative_unified_latents, ...):
-        for t in timesteps:
-            positive_kwargs = {
-                "hidden_states": unified_latents,  # Image + text together
-                ...
-            }
-            negative_kwargs = {
-                "hidden_states": negative_unified_latents,
-                ...
-            }
-
-            noise_pred = self.predict_noise_maybe_with_cfg(...)
-            latents = self.scheduler_step_maybe_with_cfg(...)
-
-        return latents
-```
-
-### Pattern 3: Image Editing Pipeline
-
-**Models:** Qwen-Image-Edit, LongCat-Image-Edit
-
-```python
-class ImageEditCFGMixin(CFGParallelMixin):
-    def diffuse(
-        self,
-        latents,
-        image_latents,  # Condition image
-        text_embeds,
-        negative_text_embeds,
-        ...
-    ):
-        for t in timesteps:
-            # Concatenate noise latents with condition image latents
-            latent_model_input = torch.cat([latents, image_latents], dim=1)
-
-            positive_kwargs = {
-                "hidden_states": latent_model_input,  # Concatenated
-                "encoder_hidden_states": text_embeds,
-                ...
-            }
-            negative_kwargs = {
-                "hidden_states": latent_model_input,
-                "encoder_hidden_states": negative_text_embeds,
-                ...
-            }
-
-            # Slice output to remove condition latents
-            noise_pred = self.predict_noise_maybe_with_cfg(
-                ...,
-                output_slice=latents.size(1),  # Only keep noise prediction
-            )
-
-            # Step only the noise latents
-            latents = self.scheduler_step_maybe_with_cfg(
-                noise_pred, t, latents, do_true_cfg
-            )
-
-        return latents
-```
-
----
 
 ## Troubleshooting
 
@@ -514,7 +259,7 @@ class ImageEditCFGMixin(CFGParallelMixin):
    initialize_model_parallel(cfg_parallel_size=2)
    ```
 
-2. **`do_true_cfg` is False:**
+2. **`CFG is not enabled**
 
    **Solution:** Ensure `guidance_scale > 1.0` and negative prompt is provided:
    ```python
@@ -536,67 +281,6 @@ class ImageEditCFGMixin(CFGParallelMixin):
    noise_pred = self.predict_noise_maybe_with_cfg(...)
    ```
 
-### Issue: Different results with/without CFG parallel
-
-**Symptoms:** Images look different when CFG parallel is enabled vs disabled.
-
-**Cause:** Incorrect rank assignment or gathering.
-
-**Solution:** Verify rank 0 computes positive, rank 1 computes negative:
-```python
-# In predict_noise_maybe_with_cfg:
-cfg_rank = get_classifier_free_guidance_rank()
-
-if cfg_rank == 0:
-    local_pred = self.predict_noise(**positive_kwargs)  # MUST be positive
-else:
-    local_pred = self.predict_noise(**negative_kwargs)  # MUST be negative
-```
-
-### Issue: Rank 1 crashes or hangs
-
-**Symptoms:** Only rank 0 completes, rank 1 hangs or errors.
-
-**Causes & Solutions:**
-
-1. **Rank 1 trying to step scheduler:**
-
-   **Solution:** Ensure only rank 0 steps:
-   ```python
-   if cfg_parallel_ready:
-       if cfg_rank == 0:
-           latents = self.scheduler_step(noise_pred, t, latents)
-       # Don't step on rank 1!
-       cfg_group.broadcast(latents, src=0)
-   ```
-
-2. **Missing broadcast:**
-
-   **Solution:** Always broadcast latents after stepping:
-   ```python
-   latents = latents.contiguous()  # Important!
-   cfg_group.broadcast(latents, src=0)
-   ```
-
-### Issue: Image editing produces artifacts
-
-**Symptoms:** Edited images have visible artifacts or inconsistencies.
-
-**Cause:** Condition latents included in noise prediction.
-
-**Solution:** Use `output_slice` parameter:
-```python
-# Concatenate noise + condition latents
-latent_model_input = torch.cat([latents, image_latents], dim=1)
-
-# Predict noise and slice to remove condition latents
-noise_pred = self.predict_noise_maybe_with_cfg(
-    ...,
-    output_slice=latents.size(1),  # Keep only first N channels
-)
-```
-
----
 
 ## Reference Implementations
 
@@ -606,7 +290,6 @@ Complete examples in the codebase:
 |----------|------|-------|
 | **Qwen-Image** | `vllm_omni/diffusion/models/qwen_image/cfg_parallel.py` | Dual-stream transformer |
 | **Qwen-Image-Edit** | `vllm_omni/diffusion/models/qwen_image/pipeline_qwen_image_edit.py` | Image editing with `output_slice` |
-| **LongCat-Image** | `vllm_omni/diffusion/models/longcat_image/pipeline_longcat_image.py` | FLUX-like dual-stream |
 | **Wan2.2** | `vllm_omni/diffusion/models/wan2_2/pipeline_wan2_2.py` | Dual-transformer architecture |
 | **CFGParallelMixin** | `vllm_omni/diffusion/distributed/cfg_parallel.py` | Base mixin implementation |
 
