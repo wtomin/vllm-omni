@@ -1,4 +1,4 @@
-# How to Add a Diffusion Model to vLLM-Omni
+# Adding a Diffusion Model to vLLM-Omni
 
 This guide walks you through adding a new diffusion model to vLLM-Omni. We use **Qwen-Image** as the primary example, with references to other models (LongCat, Flux, Wan2.2) to illustrate different patterns.
 
@@ -14,6 +14,7 @@ This guide walks you through adding a new diffusion model to vLLM-Omni. We use *
 5. [Troubleshooting](#troubleshooting)
 6. [Pull Request Checklist](#pull-request-checklist)
 7. [Reference Implementations](#reference-implementations)
+8. [Summary](#summary)
 
 ---
 
