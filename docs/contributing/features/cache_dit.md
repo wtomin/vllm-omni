@@ -77,6 +77,7 @@ def enable_cache_for_dit(pipeline: Any, cache_config: Any) -> Callable[[int], No
 ## Custom Architectures: Writing a Custom Enabler
 
 Some models require custom handling:
+
 - **Dual-transformer:** Models with separate high-noise and low-noise transformers (e.g., Wan2.2)
 - **Multi-block-list:** Models with multiple block lists in one transformer (e.g., LongCatImage with `transformer_blocks` + `single_transformer_blocks`)
 - **Special forward patterns:** Models with non-standard block execution patterns
@@ -87,12 +88,6 @@ For complex architectures, you need to write a custom enabler function. This sec
 
 Wan2.2 uses two transformers: one for high-noise steps and one for low-noise steps.
 
-**Key challenges:**
-- Need to apply cache-dit to both transformers
-- Need to split `num_inference_steps` based on `boundary_ratio`
-- Each transformer may have different cache configurations
-
-**Solution:**
 
 ```python
 def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
@@ -184,12 +179,6 @@ def enable_cache_for_wan22(pipeline: Any, cache_config: Any) -> Callable[[int], 
 
 LongCatImage has a single transformer with two block lists: `transformer_blocks` and `single_transformer_blocks`.
 
-**Key challenges:**
-- Multiple block lists in one transformer
-- Need to specify different forward patterns for different block lists
-
-**Solution:**
-
 ```python
 def enable_cache_for_longcat_image(pipeline: Any, cache_config: Any) -> Callable[[int], None]:
     """Enable cache-dit for LongCatImage pipeline."""
@@ -279,21 +268,29 @@ This section lists important API names from Cache-DiT, which are relevant to vLL
 
 ### Key APIs
 
-**`BlockAdapter`** - Core abstraction for applying cache-dit to transformers
+**`BlockAdapter`**
+
+- Core abstraction for applying cache-dit to transformers
 - Specifies transformer module(s), block list(s), and forward signature pattern(s)
 - Configures per-transformer cache settings via `params_modifiers`
 - Handles single/dual transformer architectures
 
-**`ForwardPattern`** - Defines block forward signature patterns
+**`ForwardPattern`**
+
+- Defines block forward signature patterns
 - `Pattern_0`: `(hidden_states, encoder_hidden_states)` - Language model blocks
 - `Pattern_1`: `(hidden_states, temb, **kwargs)` - Single-stream transformers
 - `Pattern_2`: `(hidden_states, encoder_hidden_states, temb, **kwargs)` - Dual-stream transformers
 
-**`ParamsModifier`** - Per-transformer or per-block-list cache configuration customization
+**`ParamsModifier`**
+
+- Per-transformer or per-block-list cache configuration customization
 - Overrides `cache_config` (warmup steps, cached steps, etc.)
 - Overrides `calibrator_config` (calibration strategy, order, etc.)
 
-**`refresh_context()`** - Updates cache context when `num_inference_steps` changes
+**`refresh_context()`**
+
+- Updates cache context when `num_inference_steps` changes
 - Required function returned by every enabler
 - Supports SCM (Selective Computation Masking) for dynamic step skipping
 
@@ -326,6 +323,7 @@ images = omni.generate(
 ```
 
 **Verify:**
+
 1. Cache is applied (check logs for "Cache-dit enabled successfully on xxx")
 2. Performance improvement (should be around 2x faster)
 3. Image quality (compare with `cache_backend=None`)
@@ -341,6 +339,7 @@ images = omni.generate(
 **Cause:** Enabler not registered or pipeline name mismatch.
 
 **Solution:**
+
 1. Verify `pipeline.__class__.__name__` matches registry key
 2. Check enabler is in `CUSTOM_DIT_ENABLERS`
 
@@ -349,6 +348,7 @@ images = omni.generate(
 **Cause:** Cache parameters too aggressive.
 
 **Solution:**
+
 1. Lower `residual_diff_threshold` (try 0.12-0.18)
 2. Increase `max_warmup_steps` (try 6-8)
 3. Reduce `max_continuous_cached_steps` (try 2)

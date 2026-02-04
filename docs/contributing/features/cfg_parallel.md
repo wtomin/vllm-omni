@@ -2,7 +2,7 @@
 
 This section describes how to add CFG-Parallel (Classifier-Free Guidance Parallel) to a diffusion **pipeline**. We use the Qwen-Image pipeline (`vllm_omni/diffusion/models/qwen_image/pipeline_qwen_image.py`) as the reference implementation.
 
-CFG-Parallel accelerates diffusion inference by distributing the conditional (positive) and unconditional (negative) forward passes to different GPU ranks, enabling **2x speedup** for CFG-enabled generation compared to sequential execution.
+CFG-Parallel accelerates diffusion inference by distributing the conditional (positive) and unconditional (negative) forward passes to different GPU ranks.
 
 ## Overview
 
