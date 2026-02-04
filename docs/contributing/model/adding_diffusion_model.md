@@ -32,7 +32,7 @@ vLLM-Omni's diffusion inference follows this architecture:
 **Key Components:**
 
 1. **Request Handling:** User prompts → `OmniDiffusionRequest`
-2. **Diffusion Engine:**  Request → Image preprocessing (Optional) → Pipeline execution -> Image post-processing
+2. **Diffusion Engine:**  Request →  Preprocessing (Optional) → Pipeline execution -> Post-processing
 2. **Pipeline Execution:** Request → Encode prompt → Diffusion steps → Vae decode
 
 
@@ -54,12 +54,9 @@ vllm_omni/
 
 **Naming Conventions:**
 
-- **Model directory:** `your_model_name` (lowercase, underscores)
-  - Examples: `qwen_image`, `flux`, `longcat_image`, `wan2_2`
-- **Pipeline file:** `pipeline_xxx.py` where `xxx` describes the task
-  - Examples: `pipeline_qwen_image.py`, `pipeline_qwen_image_edit.py`
-- **Transformer file:** `xxx_transformer.py` matching transformer class name
-  - Examples: `qwen_image_transformer.py`, `flux_transformer.py`
+- **Model directory:** `your_model_name` (lowercase, underscores),  e.g., `qwen_image`, `flux`, `longcat_image`, `wan2_2`
+- **Pipeline file:** `pipeline_xxx.py` where `xxx` describes the task, e.g., `pipeline_qwen_image.py`, `pipeline_qwen_image_edit.py`
+- **Transformer file:** `xxx_transformer.py` matching transformer class name, e.g.,  `qwen_image_transformer.py`, `flux_transformer.py`
 
 ---
 
@@ -71,16 +68,6 @@ This section covers the minimal steps to get a model working in vLLM-Omni with b
 
 The transformer is the core denoising network. Start by copying the transformer implementation from Diffusers and making these adaptations.
 
-#### 1.1: Create Model Directory and Copy Files
-
-```bash
-# Create model directory
-mkdir -p vllm_omni/diffusion/models/qwen_imag
-
-# Copy transformer from Diffusers (example for Qwen-Image)
-cp path/to/diffusers/src/diffusers/models/transformers/transformer_qwen_image.py \
-   vllm_omni/diffusion/models/qwen_imag/qwen_image_transformer.py
-```
 
 #### 1.2: Remove Diffusers Mixins
 
@@ -96,7 +83,7 @@ Diffusers' `Mixin` classes are not needed in vLLM-Omni. Remove them:
     """Your transformer model."""
 ```
 
-**Common mixins to remove:**
+**Example mixins to remove:**
 
 - `ModelMixin` - Weight loading utilities (vLLM-Omni has its own weight loader)
 - `AttentionModuleMixin` - Attention processors (using vLLM-Omni's Attention layer instead)
@@ -168,7 +155,7 @@ class YourAttentionBlock(nn.Module):
 + logger = init_logger(__name__)
 ```
 
-**Custom layers (if needed):**
+**Custom layers from vLLM and vLLM-Omni (if needed):**
 
 ```python
 from vllm.model_executor.layers.layernorm import RMSNorm
@@ -209,7 +196,7 @@ class YourModelTransformer2DModel(nn.Module):
     def __init__(
         self,
         *,
-        od_config: OmniDiffusionConfig | None = None,  # vLLM-Omni config
+        od_config: OmniDiffusionConfig | None = None,  # ← Add vLLM-Omni config
         # ... other model-specific parameters
         num_layers: int = 28,
         hidden_size: int = 3072,
@@ -233,12 +220,6 @@ class YourModelTransformer2DModel(nn.Module):
 The pipeline orchestrates the full generation process (text encoding, denoising loop, VAE decoding). Adapt it from Diffusers format to vLLM-Omni's interface.
 
 #### 2.1: Remove Diffusers Inheritance
-
-```bash
-# Copy pipeline from Diffusers
-cp path/to/diffusers/src/diffusers/pipelines/your_model/pipeline_your_model.py \
-   vllm_omni/diffusion/models/your_model_name/pipeline_your_model.py
-```
 
 **Remove Diffusers base classes:**
 ```diff
@@ -725,8 +706,8 @@ See detailed guide: [How to add Tensor Parallel support](../features/tensor_para
 
 **Quick setup:**
 
-1. Replace Linear layers by `ParallelLinear` layers in vLLM.
-2. Inherit `CFGParallelMixin` in your pipeline class
+1. Replace Linear layers by various parallel linear layers (e.g., `ColumnParallelLinear`) in vLLM
+2. Check `tp_size` validity: dimension needs to be divisible by `tp_size`
 
 **Usage:** Set `tensor_parallel_size` when initializing:
 ```python
@@ -771,7 +752,7 @@ See detailed guide: [How to add TeaCache support](../features/teacache.md)
 
 1. Write extractor function
 2. Register in `EXTRACTOR_REGISTRY`
-3. Add polynomial coefficients (optional)
+3. Add polynomial coefficients
 
 **Usage:** Set `cache_backend` and `cache_config` when initializing:
 ```python
@@ -844,23 +825,8 @@ hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
 **Symptoms:** Generated images look different from Diffusers
 
 **Causes:**
-1. Attention backend differences (FlashAttention vs PyTorch)
+1. Attention backend differences (FlashAttention vs PyTorch SDPA)
 2. Missing normalization or scaling
-3. Incorrect scheduler configuration
-
-**Solutions:**
-```python
-# 1. Use same random seed
-torch.manual_seed(42)
-
-# 2. Check attention scaling
-self.attn = Attention(
-    softmax_scale=1.0 / (self.head_dim ** 0.5),  # ← Important!
-)
-
-# 3. Verify scheduler matches Diffusers
-self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(...)
-```
 
 #### Issue: Out of memory (OOM)
 
@@ -879,9 +845,8 @@ self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(...)
 
 3. **Enable model offloading:**
    ```python
-   omni = Omni(model="...", device_map="auto")
+   omni = Omni(model="...", enable_cpu_offload=True)
    ```
-`
 
 ---
 
@@ -900,7 +865,7 @@ When submitting a PR to add your model, include:
 
 - ✅ Example script in `examples/`
 - ✅ Test file in `tests/e2e/` (optional)
-- ✅ README documentation (required)
+- ✅ README documentation creation or updates (required)
 
 ### 3. Documentation Updates
 
@@ -909,45 +874,6 @@ When submitting a PR to add your model, include:
   - `docs/user_guide/diffusion_acceleration.md`
   - `docs/user_guide/diffusion/parallelism_acceleration.md`
 
-### 4. Verification Results
-
-Include in PR description:
-
-**Output Verification:**
-```
-Prompt: "a cat sitting on a windowsill"
-Diffusers output: [attach image]
-vLLM-Omni output: [attach image]
-Visual similarity: ✅ Identical / ⚠️ Minor differences / ❌ Different
-```
-
-**Performance Benchmark:**
-```
-Batch size: 1
-Inference steps: 50
-Image size:  1024x1024
-
-Diffusers: xxx s
-vLLM-Omni: xxx s
-```
-
-**Parallelism Support (Optional):**
-```
-✅ Tensor Parallel: Tested with tp_size=[1, 2, 4]
-✅ CFG Parallel: Tested with cfg_parallel_size=2
-✅ Sequence Parallel: Tested with sp_size=[1, 2]
-```
-
-**Cache Acceleration (Optional):**
-```
-✅ TeaCache: Supported, xx speedup at rel_l1_thresh=0.2
-✅ Cache-DiT: Supported, xx speedup with DBCache
-```
-
-### 4. Documentation
-
-- ✅ Model-specific documentation (if needed)
-- ✅ Usage examples
 
 ## 5. Model Recipe
 
