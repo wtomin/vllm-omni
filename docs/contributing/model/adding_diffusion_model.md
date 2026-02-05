@@ -33,7 +33,7 @@ vLLM-Omni's diffusion inference follows this architecture:
 
 1. **Request Handling:** User prompts → `OmniDiffusionRequest`
 2. **Diffusion Engine:**  Request →  Preprocessing (Optional) → Pipeline execution -> Post-processing
-2. **Pipeline Execution:** Request → Encode prompt → Diffusion steps → Vae decode
+3. **Pipeline Execution:** Request → Encode prompt → Diffusion steps → Vae decode
 
 
 ## Directory Structure
