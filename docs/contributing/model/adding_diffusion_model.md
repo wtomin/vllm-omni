@@ -602,7 +602,7 @@ If your model is one of Text-to-Image, Text-to-Audio, Text-to-Video, Image-to-Im
 | Text-to-Video | `examples/offline_inference/text_to_video/text_to_video.py` |
 
 
-If new CLI arguments need to be added, please edit one of the scripts above, and update the example inference script in its corresponding document file, (e.g., `examples/offline_inference/text_to_video/text_to_video.md`).
+If new CLI arguments need to be added, please edit the offline inference script corresponding to your model category from the table above, and update the example inference script in its corresponding document file (e.g., `examples/offline_inference/text_to_video/text_to_video.md`).
 
 For online inference examples, please check `examples/online_inference/TASK_NAME` and update the document file accordingly.
 
