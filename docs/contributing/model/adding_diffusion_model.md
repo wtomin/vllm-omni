@@ -69,7 +69,7 @@ This section covers the minimal steps to get a model working in vLLM-Omni with b
 The transformer is the core denoising network. Start by copying the transformer implementation from Diffusers and making these adaptations.
 
 
-#### 1.2: Remove Diffusers Mixins
+#### 1.1: Remove Diffusers Mixins
 
 Diffusers' `Mixin` classes are not needed in vLLM-Omni. Remove them:
 
@@ -90,7 +90,7 @@ Diffusers' `Mixin` classes are not needed in vLLM-Omni. Remove them:
 - `ConfigMixin` - Config management (not needed)
 - `PeftAdapterMixin` - Parameter efficient finetune utilities (not needed)
 
-#### 1.3: Replace Attention Implementation
+#### 1.2: Replace Attention Implementation
 
 **The most important adaptation:** Replace Diffusers' attention with vLLM-Omni's optimized `Attention` layer.
 
@@ -144,7 +144,7 @@ class YourAttentionBlock(nn.Module):
 
 **Attention backends:** vLLM-Omni automatically selects the attention backend given the environmental variable `DIFFUSION_ATTENTION_BACKEND`. The default attention backend is `FLASH_ATTN` for diffusion models.
 
-#### 1.4: Replace Imports and Utilities
+#### 1.3: Replace Imports and Utilities
 
 **Logger:**
 ```diff
@@ -163,7 +163,7 @@ from vllm_omni.diffusion.layers.rope import RotaryEmbedding
 from vllm_omni.diffusion.layers.adalayernorm import AdaLayerNorm
 ```
 
-#### 1.5: Remove Training-Only Code
+#### 1.4: Remove Training-Only Code
 
 Remove code that's only needed for training:
 
@@ -185,7 +185,7 @@ Remove code that's only needed for training:
 + # Removed dropout for inference
 ```
 
-#### 1.6: Add Configuration Support
+#### 1.5: Add Configuration Support
 
 Add support for vLLM-Omni's `OmniDiffusionConfig`:
 
