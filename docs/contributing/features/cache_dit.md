@@ -1,8 +1,10 @@
 # How to add cache-dit support for a new model
 
-This section describes how to add cache-dit acceleration to a new diffusion **pipeline**. We use the Qwen-Image pipeline and LongCat-Image pipeline as reference implementations.
+This section describes how to add cache-dit acceleration to a new diffusion pipeline. We use the Qwen-Image pipeline and LongCat-Image pipeline as reference implementations.
 
 ---
+
+## Table of Contents
 
 - [Overview](#overview)
 - [Standard Models: Automatic Support](#standard-models-automatic-support)
@@ -231,11 +233,11 @@ images = omni.generate(
 
 **Causes & Solutions:**
 
-1. **Enabler not registered:**
+- **Enabler not registered:**
 
-   **Problem:** Pipeline name not in `CUSTOM_DIT_ENABLERS` registry.
+**Problem:** Pipeline name not in `CUSTOM_DIT_ENABLERS` registry.
 
-   **Solution:** Verify `pipeline.__class__.__name__` matches the registry key and add your enabler to `CUSTOM_DIT_ENABLERS`.
+**Solution:** Verify `pipeline.__class__.__name__` matches the registry key and add your enabler to `CUSTOM_DIT_ENABLERS`.
 
 
 ### Issue: Quality degradation
@@ -244,16 +246,16 @@ images = omni.generate(
 
 **Causes & Solutions:**
 
-1. **Cache parameters too aggressive:**
+- **Cache parameters too aggressive:**
 
-   **Solution:**
-   ```python
-   cache_config={
-       "residual_diff_threshold": 0.12,  # Lower from 0.24 (try 0.12-0.18)
-       "max_warmup_steps": 6,            # Increase from 4 (try 6-8)
-       "max_continuous_cached_steps": 2, # Reduce if higher
-   }
-   ```
+**Solution:**
+```python
+cache_config={
+    "residual_diff_threshold": 0.12,  # Lower from 0.24 (try 0.12-0.18)
+    "max_warmup_steps": 6,            # Increase from 4 (try 6-8)
+    "max_continuous_cached_steps": 2, # Reduce if higher
+}
+```
 
 Check the [user guide for cache_dit](../../user_guide/diffusion/cache_dit_acceleration.md) for more adjustable parameters.
 

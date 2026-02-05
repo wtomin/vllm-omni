@@ -1,8 +1,17 @@
 # How to add Tensor Parallel support for a new model
 
-This section describes how to add Tensor Parallel (TP) to a diffusion **transformer model**. We use the Z-Image transformer (`vllm_omni/diffusion/models/z_image/z_image_transformer.py`) and FLUX transformer as reference implementations.
+This section describes how to add Tensor Parallel (TP) to a diffusion transformer model. We use the Z-Image transformer as the reference implementation.
 
-Tensor Parallel distributes model weights across multiple GPUs, enabling inference of large models that wouldn't fit in a single GPU's memory. It provides **near-linear speedup** for compute-bound operations while reducing per-GPU memory usage proportionally to the number of GPUs.
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Step-by-Step Implementation](#step-by-step-implementation)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Reference Implementations](#reference-implementations)
+- [Summary](#summary)
 
 ---
 
@@ -12,52 +21,40 @@ Tensor Parallel distributes model weights across multiple GPUs, enabling inferen
 
 Tensor Parallel (TP) is a model parallelism technique that **shards model weights** across multiple GPUs. Each GPU holds only a portion of the model's parameters and computes only part of each layer's output.
 
-Diffusion transformers contain large attention and MLP layers. We can use Tensor Parallel (TP) to shard the model dimension across multiple GPUs:
+Diffusion transformers contain large attention and MLP layers. We can use Tensor Parallel to shard the model dimension across multiple GPUs, allowing larger models to fit in memory while achieving near-linear speedup.
 
-### Key API:
+### Architecture
 
-The major function for querying TP state `get_tensor_model_parallel_world_size()`:
+The Tensor Parallel implementation relies vLLM's Parallel Layers:
 
-```python
-from vllm.distributed import get_tensor_model_parallel_world_size
+[vLLM Parallel Layers API Reference](https://docs.vllm.ai/en/latest/contributing/model/basic/?h=column#3-optional-implement-tensor-parallelism-and-quantization-support)
 
-# Get current tensor parallel world size
-tp_size = get_tensor_model_parallel_world_size()
-```
+**Parallel Layer Types:**
 
-**Returns:**
-- `1` - TP is not enabled (single GPU )
-- `N` - Running with N-way tensor parallelism (N GPUs)
+| Layer Type | Purpose | Weight Partitioning |
+|------------|---------|---------------------|
+| `ColumnParallelLinear` | First FFN layer, separated QKV | Columns (output dimension) |
+| `RowParallelLinear` | Second FFN layer, attention output | Rows (input dimension) |
+| `QKVParallelLinear` | Multi-head/grouped-query attention QKV | Handles head replication automatically |
+| `ReplicatedLinear` | Layers that shouldn't be sharded | No partitioning (replicated) |
 
 ---
 
-## Tensor Parallel
+## Step-by-Step Implementation
 
-### Parallel Layers
+### Step 1: Identify Linear Layers
 
-Tensor Parallel uses parallel linear layers from vLLM:
+Find all `nn.Linear` layers in your transformer that need to be sharded.
 
-**1. `ColumnParallelLinear`**
+**Key questions:**
+- Which layers should be column parallel (weight split by columns)?
+- Which layers should be row parallel (weight split by rows)?
 
-The input tensor is replicated. The weight matrix is partitioned along the columns (output dimension). The result is partitioned along the column dimension. Typically used for the first FFN layer and the separated QKV transformation of the attention layer in the original Transformer.
+### Step 2: Replace Linear Layers with Parallel Equivalents
 
-**2. `RowParallelLinear`**
+Replace `nn.Linear` with parallel layers from `vllm.model_executor.layers.linear`.
 
-The input tensor is partitioned along the hidden dimension. The weight matrix is partitioned along the rows (input dimension). An all-reduce operation is performed after the matrix multiplication to reduce the results. Typically used for the second FFN layer and the output linear transformation of the attention layer.
-
-**3. `QKVParallelLinear`**
-
-Parallel linear layer for the query, key, and value projections of the multi-head and grouped-query attention mechanisms. When number of key/value heads are less than the world size, this class replicates the key/value heads properly. This class handles the weight loading and replication of the weight matrices.
-
-**4. `ReplicatedLinear`**
-
-Replicates the inputs and weights across multiple GPUs. No memory saving.
-
-### Standard Patterns
-
-**Pattern 1: MLP Block (Up-Down)**
-
-Most transformer MLPs follow this pattern:
+**Example (MLP Block - Up-Down Pattern):**
 
 ```python
 class FeedForward(nn.Module):
@@ -89,9 +86,7 @@ class FeedForward(nn.Module):
         return x
 ```
 
-**Pattern 2: Attention (QKV-Out)**
-
-Attention shards along the **head dimension**:
+**Example (Attention - QKV-Out Pattern):**
 
 ```python
 class Attention(nn.Module):
@@ -135,37 +130,44 @@ class Attention(nn.Module):
         return out
 ```
 
----
+**Key Points:**
 
-## Step-by-Step: Implementing Tensor Parallel
+- `ColumnParallelLinear` → `RowParallelLinear` is the standard pairing
+- Set `input_is_parallel=True` on `RowParallelLinear` when input comes from `ColumnParallelLinear`
+- Use `QKVParallelLinear` for attention projections (handles head replication automatically)
 
-### Step 1: Identify Linear Layers
-
-Find all `nn.Linear` layers in your transformer that need to be sharded:
-
-**Key questions:**
-1. Which layers should be column parallel (weight split by columns)?
-2. Which layers should be row parallel (weight split by rows)?
-
-### Step 2: Replace Linear Layers
-
-Replace `nn.Linear` with parallel equivalents from `vllm.model_executor.layers.linear`:
-
-## TP Constraints and Validation
-
-### Required Divisibility Constraints
+### Step 3: Validate TP Constraints
 
 For correct TP operation, these dimensions **must be divisible** by `tensor_parallel_size`:
 
 | Dimension | Reason | Example Error |
 |-----------|--------|---------------|
-| `hidden_dim` | Model dimension sharded by ColumnParallel | `hidden_dim=3840, tp=3` ❌ (3840 % 3 ≠ 0) |
+| `ffn_hidden_dim` | FFN hidden dimension sharded by ColumnParallel | `ffn_hidden_dim=3840, tp=3` ❌ (3840 % 3 ≠ 0) |
 | `num_heads` | Heads sharded by QKVParallelLinear | `num_heads=30, tp=4` ❌ (30 % 4 ≠ 0) |
 | `num_kv_heads` | KV heads sharded by QKVParallelLinear | `num_kv_heads=30, tp=4` ❌ (30 % 4 ≠ 0) |
 
+---
+
 ## Testing
 
-Taking text-to-image as an example:
+After adding Tensor Parallel support, test with:
+
+```python
+from vllm_omni import Omni
+from vllm_omni.diffusion.data import DiffusionParallelConfig
+from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+
+parallel_config = DiffusionParallelConfig(tensor_parallel_size=2)
+omni = Omni(model="your-model-name", parallel_config=parallel_config)
+
+output = omni.generate(
+    "a cup of coffee on the table",
+    OmniDiffusionSamplingParams(num_inference_steps=50),
+)
+```
+
+**Or via command line:**
+
 ```bash
 cd examples/offline_inference/text_to_image
 python text_to_image.py \
@@ -177,8 +179,15 @@ python text_to_image.py \
     --output "tp_enabled.png" \
     --tensor_parallel_size 2
 ```
-Please record the "e2e_time_ms" in the log and the generated result, and compare them with the results of Tensor-Parallel not enabled. Please record the comparison results in your PR.
 
+**Verify:**
+
+1. Check the `e2e_time_ms` in the log for speedup
+2. Compare generated image quality with TP disabled
+3. Verify memory usage is reduced proportionally
+4. Record comparison results in your PR
+
+---
 
 ## Troubleshooting
 
@@ -188,45 +197,18 @@ Please record the "e2e_time_ms" in the log and the generated result, and compare
 
 **Causes & Solutions:**
 
-1. **TP size not set:**
+- **Still using `nn.Linear`:**
 
-   **Check current TP size:**
-   ```python
-   from vllm.distributed import get_tensor_model_parallel_world_size
+**Problem:** Linear layers not replaced with parallel equivalents.
 
-   # Check TP configuration
-   tp_size = get_tensor_model_parallel_world_size()
-   print(f"Current TP size: {tp_size}")
-   # Should print N for N-way TP, 1 for no TP
-   ```
+**Solution:** Replace with parallel layers:
+```python
+# ❌ BAD
+self.proj = nn.Linear(dim, dim)
 
-   Or from command line:
-   ```bash
-   python -c "from vllm.distributed import get_tensor_model_parallel_world_size; print(get_tensor_model_parallel_world_size())"
-   ```
-
-   **Solution:** Initialize with `tensor_parallel_size=N`:
-   ```python
-   from vllm_omni.diffusion.data import DiffusionParallelConfig
-
-   parallel_config = DiffusionParallelConfig(tensor_parallel_size=2)
-   model = Omni(model="model_name", parallel_config=parallel_config)
-
-   # Verify TP is active
-   from vllm.distributed import get_tensor_model_parallel_world_size
-   assert get_tensor_model_parallel_world_size() == 2, "TP not initialized correctly"
-   ```
-
-2. **Still using `nn.Linear`:**
-
-   **Solution:** Replace with parallel layers:
-   ```python
-   # ❌ BAD
-   self.proj = nn.Linear(dim, dim)
-
-   # ✅ GOOD
-   self.proj = RowParallelLinear(dim, dim, input_is_parallel=True)
-   ```
+# ✅ GOOD
+self.proj = RowParallelLinear(dim, dim, input_is_parallel=True)
+```
 
 ### Issue: Dimension mismatch errors
 
@@ -234,36 +216,35 @@ Please record the "e2e_time_ms" in the log and the generated result, and compare
 
 **Causes & Solutions:**
 
-1. **Missing `input_is_parallel=True`:**
+- **Missing `input_is_parallel=True`:**
 
-   **Problem:** RowParallelLinear expects sharded input but receives full tensor.
+**Problem:** RowParallelLinear expects sharded input but receives full tensor.
 
-   **Solution:** Set `input_is_parallel=True` when input comes from ColumnParallelLinear:
-   ```python
-   # ✅ GOOD: Correct pairing
-   self.w1 = ColumnParallelLinear(dim, hidden_dim)
-   self.w2 = RowParallelLinear(
-       hidden_dim,
-       dim,
-       input_is_parallel=True,  # Input sharded from w1
-   )
-   ```
+**Solution:** Set `input_is_parallel=True` when input comes from ColumnParallelLinear:
+```python
+# ✅ GOOD: Correct pairing
+self.w1 = ColumnParallelLinear(dim, hidden_dim)
+self.w2 = RowParallelLinear(
+    hidden_dim,
+    dim,
+    input_is_parallel=True,  # Input sharded from w1
+)
+```
 
-2. **Incorrect split dimensions:**
+- **Incorrect split dimensions:**
 
-   **Problem:** QKV split sizes don't match sharded dimensions.
+**Problem:** QKV split sizes don't match sharded dimensions.
 
-   **Solution:** Use `self.to_qkv.num_heads` (local heads per GPU):
-   ```python
-   # ❌ BAD: Uses total heads
-   q_size = self.total_num_heads * self.head_dim
+**Solution:** Use `self.to_qkv.num_heads` (local heads per GPU):
+```python
+# ❌ BAD: Uses total heads
+q_size = self.total_num_heads * self.head_dim
 
-   # ✅ GOOD: Uses local heads
-   q_size = self.to_qkv.num_heads * self.head_dim
-   ```
+# ✅ GOOD: Uses local heads
+q_size = self.to_qkv.num_heads * self.head_dim
+```
 
 ---
-
 
 ## Reference Implementations
 
@@ -286,4 +267,4 @@ Adding Tensor Parallel support to a transformer:
 1. ✅ **Identify linear layers** - Which layers should be sharded?
 2. ✅ **Replace with parallel layers** - Use QKVParallelLinear, ColumnParallelLinear, RowParallelLinear
 3. ✅ **Validate TP constraints** - Ensure dimensions divisible by TP size
-4. ✅ **Test with valid `tp_size`** - Check the memory usage, inference speed, and generative quality.
+4. ✅ **Test** - Verify with `tensor_parallel_size=N`, check memory, speed, and quality

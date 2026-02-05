@@ -2,6 +2,8 @@
 
 This section describes how to add TeaCache to a diffusion transformer model. We use the Qwen-Image transformer as the reference implementation.
 
+---
+
 ## Table of Contents
 
 - [Overview](#overview)
@@ -378,22 +380,22 @@ See more detailed examples in [user guide for teacache](../../user_guide/diffusi
 
 **Causes & Solutions:**
 
-1. **Extractor not registered:**
+- **Extractor not registered:**
 
-   **Problem:** The transformer class name doesn't exist in `EXTRACTOR_REGISTRY`.
+**Problem:** The transformer class name doesn't exist in `EXTRACTOR_REGISTRY`.
 
-   **Solution:** Check the class name and add to registry:
-   ```python
-   # Check transformer class name
-   print(pipeline.transformer.__class__.__name__)
+**Solution:** Check the class name and add to registry:
+```python
+# Check transformer class name
+print(pipeline.transformer.__class__.__name__)
 
-   # Add to EXTRACTOR_REGISTRY
-   EXTRACTOR_REGISTRY["YourTransformer2DModel"] = extract_your_context
-   ```
+# Add to EXTRACTOR_REGISTRY
+EXTRACTOR_REGISTRY["YourTransformer2DModel"] = extract_your_context
+```
 
-2. **Transformer class name mismatch:**
+- **Transformer class name mismatch:**
 
-   **Solution:** Ensure the registry key matches exactly with `module.__class__.__name__`.
+**Solution:** Ensure the registry key matches exactly with `module.__class__.__name__`.
 
 ### Issue: "Cannot find coefficients"
 
@@ -401,16 +403,16 @@ See more detailed examples in [user guide for teacache](../../user_guide/diffusi
 
 **Causes & Solutions:**
 
-1. **Missing coefficients in config:**
+- **Missing coefficients in config:**
 
-   **Solution:** Add coefficients to `_MODEL_COEFFICIENTS` in `config.py`, or pass custom coefficients:
-   ```python
-   omni = Omni(
-       model="your-model",
-       cache_backend="tea_cache",
-       cache_config={"coefficients": [1.0, -0.5, 0.1, -0.01, 0.001]}
-   )
-   ```
+**Solution:** Add coefficients to `_MODEL_COEFFICIENTS` in `config.py`, or pass custom coefficients:
+```python
+omni = Omni(
+    model="your-model",
+    cache_backend="tea_cache",
+    cache_config={"coefficients": [1.0, -0.5, 0.1, -0.01, 0.001]}
+)
+```
 
 ### Issue: Quality Degradation
 
@@ -418,18 +420,18 @@ See more detailed examples in [user guide for teacache](../../user_guide/diffusi
 
 **Causes & Solutions:**
 
-1. **Threshold too high:**
+- **Threshold too high:**
 
-   **Problem:** `rel_l1_thresh` is too aggressive, causing cache reuse when outputs differ significantly.
+**Problem:** `rel_l1_thresh` is too aggressive, causing cache reuse when outputs differ significantly.
 
-   **Solution:** Lower the threshold:
-   ```python
-   cache_config={"rel_l1_thresh": 0.1}  # Try 0.1-0.2
-   ```
+**Solution:** Lower the threshold:
+```python
+cache_config={"rel_l1_thresh": 0.1}  # Try 0.1-0.2
+```
 
-2. **Coefficients not tuned:**
+- **Coefficients not tuned:**
 
-   **Solution:** Estimate model-specific coefficients using the coefficient estimation process described above.
+**Solution:** Estimate model-specific coefficients using the coefficient estimation process described above.
 
 ---
 

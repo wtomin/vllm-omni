@@ -1,8 +1,18 @@
 # How to add Sequence Parallel support for a new model
 
-This section describes how to add Sequence Parallel (SP) to a diffusion **transformer model**. We use the Qwen-Image transformer (`vllm_omni/diffusion/models/qwen_image/qwen_image_transformer.py`) and Wan2.2 transformer as reference implementations.
+This section describes how to add Sequence Parallel (SP) to a diffusion transformer model. We use the Qwen-Image transformer and Wan2.2 transformer as reference implementations.
 
-Sequence Parallel distributes long sequences across multiple GPUs, enabling generation of high-resolution images and videos that wouldn't fit in a single GPU's memory. It is especially beneficial for long sequence generation, for example, video generation.
+---
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Approach 1: Non-Intrusive `_sp_plan` (Recommended)](#approach-1-non-intrusive-_sp_plan-recommended)
+- [Approach 2: Intrusive Modification (For Complex Cases)](#approach-2-intrusive-modification-for-complex-cases)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Reference Implementations](#reference-implementations)
+- [Summary](#summary)
 
 ---
 
@@ -12,15 +22,37 @@ Sequence Parallel distributes long sequences across multiple GPUs, enabling gene
 
 **Terminology Note:** Our "Sequence Parallelism" (SP) corresponds to "Context Parallelism" (CP) in the [diffusers library](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/_modeling_parallel.py). We use "Sequence Parallelism" to align with vLLM-Omni's terminology.
 
-Diffusion transformers process long sequences of image patches or video frames. For high-resolution generation, these sequences can become very large. Enabling SP allows each GPU processes only a portion of the sequence, with attention mechanisms (Ulysses/Ring) handling cross-GPU communication transparently.
+Diffusion transformers process long sequences of image patches or video frames. For high-resolution generation, these sequences can become very large. Enabling SP allows each GPU to process only a portion of the sequence, with attention mechanisms (Ulysses/Ring) handling cross-GPU communication transparently.
+
+### Architecture
+
+The major APIs for Sequence Parallel:
+
+```python
+from vllm_omni.diffusion.distributed.sp_plan import (
+    SequenceParallelInput,   # For sharding (splitting) tensors
+    SequenceParallelOutput,  # For gathering tensors
+)
+from vllm_omni.diffusion.distributed.sp_sharding import sp_shard, sp_gather
+```
+
+| Method/Class | Purpose | Behavior |
+|--------------|---------|----------|
+| `SequenceParallelInput` | Declare input sharding in `_sp_plan` | Auto-shards tensors at module input |
+| `SequenceParallelOutput` | Declare output gathering in `_sp_plan` | Auto-gathers tensors at module output |
+| `sp_shard()` | Manual tensor sharding | Splits tensor across SP workers |
+| `sp_gather()` | Manual tensor gathering | Gathers sharded tensors from all workers |
 
 ---
 
-### Architecture: Two Approaches
-
-### Approach 1: Non-Intrusive `_sp_plan` (Recommended)
+## Approach 1: Non-Intrusive `_sp_plan` (Recommended)
 
 The `_sp_plan` mechanism allows SP **without modifying `forward()` logic**. The framework automatically registers hooks to shard inputs and gather outputs at module boundaries.
+
+**When to use:**
+- Standard transformer architectures
+- Tensor operations happen at `nn.Module` boundaries
+- Predictable sharding/gathering patterns
 
 **How it works:**
 1. Declare `_sp_plan` dict in your transformer class
@@ -28,7 +60,6 @@ The `_sp_plan` mechanism allows SP **without modifying `forward()` logic**. The 
 3. Hooks shard/gather tensors at specified module boundaries
 4. Attention layers handle cross-GPU communication internally
 
-An example `_sp_plan` is shown as follows:
 ```python
 class StandardTransformer(nn.Module):
     _sp_plan = {
@@ -40,42 +71,14 @@ class StandardTransformer(nn.Module):
         "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
     }
 ```
-`StandardTransformer` has a transformer blocks list `self.blocks = nn.ModuleList([...])`, and a projection output layer `self.proj_out`. The `_sp_plan` above defines that when SP is enabled, sharding the input tensor to the first transformer block, and gathering the sharded tensor at the final output projection layer.
 
+`StandardTransformer` has a transformer blocks list `self.blocks = nn.ModuleList([...])`, and a projection output layer `self.proj_out`. The `_sp_plan` above defines that when SP is enabled, sharding the input tensor to the first transformer block, and gathering the sharded tensor at the final output projection layer.
 
 **Requirements:**
 - Tensor operations that need sharding/gathering must happen at **`nn.Module` boundaries**
 - Inline Python operations (e.g., `torch.cat`, `pad_sequence`) **cannot be hooked**
 
-**Solution for inline operations:** Extract into a submodule.
-
-### Approach 2: Intrusive Modification (For Complex Cases)
-
-For models with dynamic sharding logic that cannot be expressed via `_sp_plan`, manually insert shard/gather calls:
-
-```python
-from vllm_omni.diffusion.distributed.sp_sharding import sp_shard, sp_gather
-
-def forward(self, hidden_states, ...):
-    if self.parallel_config.sequence_parallel_size > 1:
-        hidden_states = sp_shard(hidden_states, dim=1)
-
-    # ... computation ...
-
-    if self.parallel_config.sequence_parallel_size > 1:
-        output = sp_gather(output, dim=1)
-
-    return output
-```
-
-**When to use:**
-- Dynamic/conditional sharding logic
-- Complex tensor manipulations that can't be encapsulated
-- Temporary workaround during development
-
----
-
-## Step-by-Step: Implementing `_sp_plan`
+**Solution for inline operations:** Extract into a submodule (see Step 2 below).
 
 ### Step 1: Understand Module Boundaries
 
@@ -197,11 +200,9 @@ class TransformerWithRoPE(nn.Module):
     }
 ```
 
-_Note: While writing `_sp_plan`, please check the following references for parameters and naming conventions._
+### API Reference
 
----
-
-**SequenceParallelInput parameters:**
+**SequenceParallelInput Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
@@ -210,14 +211,14 @@ _Note: While writing `_sp_plan`, please check the following references for param
 | `split_output` | bool | `False`: shard **input** params; `True`: shard **output** tensors |
 | `auto_pad` | bool | Auto-pad if sequence not divisible by world_size (default: `False`) |
 
-**SequenceParallelOutput parameters:**
+**SequenceParallelOutput Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `gather_dim` | int | Dimension to gather (usually `1` for sequence) |
 | `expected_dims` | int \| None | Expected tensor rank for validation (optional) |
 
-**Module naming conventions:**
+**Module Naming Conventions:**
 
 | Key | Meaning | Python equivalent |
 |-----|---------|-------------------|
@@ -227,7 +228,7 @@ _Note: While writing `_sp_plan`, please check the following references for param
 | `"rope"` | Named submodule | `model.rope` |
 | `"outputs.main"` | ModuleDict entry | `model.outputs["main"]` |
 
-**Dictionary value types:**
+**Dictionary Value Types:**
 
 | Key type | `split_output` | Description |
 |----------|----------------|-------------|
@@ -236,14 +237,39 @@ _Note: While writing `_sp_plan`, please check the following references for param
 
 ---
 
+## Approach 2: Intrusive Modification (For Complex Cases)
+
+For models with dynamic sharding logic that cannot be expressed via `_sp_plan`, manually insert shard/gather calls.
+
+**When to use:**
+- Dynamic/conditional sharding logic
+- Complex tensor manipulations that can't be encapsulated
+- Temporary workaround during development
+
+```python
+from vllm_omni.diffusion.distributed.sp_sharding import sp_shard, sp_gather
+
+def forward(self, hidden_states, ...):
+    if self.parallel_config.sequence_parallel_size > 1:
+        hidden_states = sp_shard(hidden_states, dim=1)
+
+    # ... computation ...
+
+    if self.parallel_config.sequence_parallel_size > 1:
+        output = sp_gather(output, dim=1)
+
+    return output
+```
+
+---
+
 ## Testing
 
 After implementing Sequence Parallel support, thoroughly test your implementation to ensure correctness and performance across different configurations.
 
-**Test Different `sp_size`**
+**Test Different `sp_size`:**
 
-Test your model with various sequence parallel world sizes to verify correctness and identify optimal configurations. For example, run text-to-image inference script:
-
+Test your model with various sequence parallel world sizes to verify correctness and identify optimal configurations:
 
 ```bash
 cd examples/offline_inference/text_to_image
@@ -256,16 +282,15 @@ python text_to_image.py \
     --output sp_test_image_ulysses=2_ring=2.png
 ```
 
+**Verify:**
 
-**Key metrics to monitor:**
-- **Correctness:** Output should be identical across all `sp_size` values
-- **Speed:** Throughput should remain stable or improve (especially for large sequences)
-
-**Test Different Combinations with Other Parallel Methods**
-
-Sequence Parallel can be combined with other parallelism strategies. Test these combinations to ensure compatibility.
+1. **Correctness:** Output should be identical across all `sp_size` values
+2. **Speed:** Throughput should remain stable or improve (especially for large sequences)
+3. **Logs:** Check for any shape mismatch or communication errors
 
 **Test with Tensor Parallel:**
+
+Sequence Parallel can be combined with other parallelism strategies:
 
 ```bash
 cd examples/offline_inference/text_to_image
@@ -275,53 +300,54 @@ python text_to_image.py \
     --num_inference_steps 50 \
     --ulysses_degree 2 \
     --tensor_parallel_size 2 \
-    --output sp_test_image_ulysses=2_ring=2.png
+    --output sp_test_image_ulysses=2_tp=2.png
 ```
 
+---
 
 ## Troubleshooting
 
-
-**Issue: Shape mismatch errors**
+### Issue: Shape mismatch errors
 
 **Symptoms:** `RuntimeError: shape mismatch` during forward pass.
 
 **Causes & Solutions:**
 
-1. **RoPE dimension mismatch:**
+- **RoPE dimension mismatch:**
 
-   **Problem:** RoPE embeddings not sharded, but hidden_states is sharded.
+**Problem:** RoPE embeddings not sharded, but hidden_states is sharded.
 
-   **Solution:** Shard RoPE outputs in `_sp_plan`:
-   ```python
-   _sp_plan = {
-       "rope": {
-           0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
-           1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
-       },
-       ...
-   }
-   ```
+**Solution:** Shard RoPE outputs in `_sp_plan`:
+```python
+_sp_plan = {
+    "rope": {
+        0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
+        1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
+    },
+    ...
+}
+```
 
-2. **Sequence Length not divisible by sp_size:**
+- **Sequence Length not divisible by sp_size:**
 
-   **Problem:** SequenceParallelInput(auto_pad=False) auto_pad should be True to enable automatic sequence padding
+**Problem:** `SequenceParallelInput(auto_pad=False)` - auto_pad should be True to enable automatic sequence padding.
 
-   **Solution:** In `SequenceParallelInput`, set `auto_pad=True`:
-   ```python
-    "blocks.0": {
-        "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, auto_pad=True)
-    }
-   ```
+**Solution:** In `SequenceParallelInput`, set `auto_pad=True`:
+```python
+"blocks.0": {
+    "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3, auto_pad=True)
+}
+```
 
-
-**Issue: Inline operations not sharded**
+### Issue: Inline operations not sharded
 
 **Symptoms:** Some tensors remain full-sized, not sharded.
 
-**Cause:** Operations happen inline in `forward()`, not at module boundaries.
+**Causes & Solutions:**
 
-**Example Problem:**
+- **Operations happen inline in `forward()`, not at module boundaries:**
+
+**Problem:**
 ```python
 def forward(self, x, cap):
     unified = torch.cat([x, cap], dim=1)  # ← Inline operation!
@@ -336,11 +362,11 @@ class ConcatModule(nn.Module):
 
 class MyModel(nn.Module):
     _sp_plan = {
-       "concat": {
-           0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
-           1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
-       },
-       ...
+        "concat": {
+            0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
+            1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
+        },
+        ...
     }
     def __init__(self):
         self.concat = ConcatModule()  # Now hookable!
@@ -348,7 +374,6 @@ class MyModel(nn.Module):
     def forward(self, x, cap):
         unified = self.concat(x, cap)  # ← Can be sharded via _sp_plan
 ```
-
 
 ---
 
@@ -371,9 +396,9 @@ Complete examples in the codebase:
 
 Adding Sequence Parallel support to a transformer:
 
-1. ✅ **Identify sharding boundaries** - Where should tensors be split/gathered?
-2. ✅ **Extract inline operations** - Move `torch.cat`, `pad_sequence`, etc. to submodules
-3. ✅ **Define `_sp_plan`** - Declare shard/gather points as class attribute
-4. ✅ **Use `auto_pad` for variable lengths** - Support non-uniform sequences
-5. ✅ **Shard RoPE embeddings together** - Keep hidden_states and RoPE dimensions aligned
-6. ✅ **Test with different world_sizes** - Verify correctness and performance
+1. ✅ **Choose approach** - Use `_sp_plan` for standard cases, intrusive modification for complex cases
+2. ✅ **Identify sharding boundaries** - Where should tensors be split/gathered?
+3. ✅ **Extract inline operations** - Move `torch.cat`, `pad_sequence`, etc. to submodules
+4. ✅ **Define `_sp_plan`** - Declare shard/gather points as class attribute
+5. ✅ **Use `auto_pad` for variable lengths** - Support non-uniform sequences
+6. ✅ **Test** - Verify with different `ulysses_degree` and `ring_degree` combinations
