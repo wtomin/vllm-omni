@@ -146,18 +146,60 @@ class ZImageTransformer(nn.Module):
 - `tensor.reshape()` → `ReshapeModule`
 - Complex preprocessing → `PreprocessModule`
 
-### Step 3: Define `_sp_plan`
+### Step 3: Write `_sp_plan` for Your Model
 
 Create a class-level `_sp_plan` dictionary specifying where to shard/gather tensors.
 
-**Type definitions:**
+Typically, there are two patterns for diffusion models:
+
+**Pattern 1: Shard at first block, gather at output projection**
+
+Most common pattern for standard transformers:
 
 ```python
 from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,   # For sharding (splitting) tensors
     SequenceParallelOutput,  # For gathering tensors
 )
+class StandardTransformer(nn.Module):
+    _sp_plan = {
+        # Shard hidden_states at first transformer block input
+        "blocks.0": {
+            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
+        },
+        # Gather at final output projection
+        "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
+    }
 ```
+
+**Pattern 2: Shard RoPE embeddings separately**
+
+When RoPE is computed in a separate module:
+
+```python
+from vllm_omni.diffusion.distributed.sp_plan import (
+    SequenceParallelInput,   # For sharding (splitting) tensors
+    SequenceParallelOutput,  # For gathering tensors
+)
+class TransformerWithRoPE(nn.Module):
+    _sp_plan = {
+        # Shard RoPE module OUTPUTS (returns tuple of cos, sin)
+        "rope": {
+            0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),  # cos
+            1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),  # sin
+        },
+        # Shard transformer block INPUT
+        "blocks.0": {
+            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
+        },
+        # Gather at output
+        "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
+    }
+```
+
+_Note: While writing `_sp_plan`, please check the following references for parameters and naming conventions._
+
+---
 
 **SequenceParallelInput parameters:**
 
@@ -191,46 +233,6 @@ from vllm_omni.diffusion.distributed.sp_plan import (
 |----------|----------------|-------------|
 | `"param_name"` (str) | `False` | Shard **input parameter** by name |
 | `0`, `1`, ... (int) | `True` | Shard **output tuple** by index |
-
-### Step 4: Write `_sp_plan` for Your Model
-
-**Pattern 1: Shard at first block, gather at output projection**
-
-Most common pattern for standard transformers:
-
-```python
-class StandardTransformer(nn.Module):
-    _sp_plan = {
-        # Shard hidden_states at first transformer block input
-        "blocks.0": {
-            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
-        },
-        # Gather at final output projection
-        "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
-    }
-```
-
-**Pattern 2: Shard RoPE embeddings separately**
-
-When RoPE is computed in a separate module:
-
-```python
-class TransformerWithRoPE(nn.Module):
-    _sp_plan = {
-        # Shard RoPE module OUTPUTS (returns tuple of cos, sin)
-        "rope": {
-            0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),  # cos
-            1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),  # sin
-        },
-        # Shard transformer block INPUT
-        "blocks.0": {
-            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
-        },
-        # Gather at output
-        "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
-    }
-```
-
 
 ---
 
