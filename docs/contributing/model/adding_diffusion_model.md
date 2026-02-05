@@ -789,9 +789,8 @@ omni = Omni(model="your-model",
 
 ## Troubleshooting
 
-### Common Issues
 
-#### Issue: ImportError when loading model
+**Issue: ImportError when loading model**
 
 **Symptoms:** `ModuleNotFoundError` or `ImportError` when calling `Omni(model="your-model")`
 
@@ -802,7 +801,7 @@ omni = Omni(model="your-model",
 3. Missing `__init__.py` exports
 
 
-#### Issue: Shape mismatch in attention
+**Issue: Shape mismatch in attention**
 
 **Symptoms:** `RuntimeError: shape mismatch` in attention forward
 
@@ -822,7 +821,7 @@ hidden_states = self.attn(query, key, value, attn_metadata=attn_metadata)
 hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
 ```
 
-#### Issue: Different outputs compared to Diffusers
+**Issue: Different outputs compared to Diffusers**
 
 **Symptoms:** Generated images look different from Diffusers
 
@@ -831,7 +830,7 @@ hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
 1. Attention backend differences (FlashAttention vs PyTorch SDPA)
 2. Missing normalization or scaling
 
-#### Issue: Out of memory (OOM)
+**4. Issue: Out of memory (OOM)**
 
 **Symptoms:** CUDA out of memory errors
 
@@ -852,39 +851,46 @@ hidden_states = hidden_states.reshape(batch_size, seq_len, -1)
    omni = Omni(model="...", enable_cpu_offload=True)
    ```
 
+4. **Apply vae tiling and slicing**
+   ```python
+   omni = Omni(model="...", vae_use_slicing=True, vae_use_tiling=True,)
+   ```
+
 ---
 
 ## Pull Request Checklist
 
 When submitting a PR to add your model, include:
 
-### 1. Implementation Files
+**1. Implementation Files**
 
 - ✅ Transformer model (`xxx_transformer.py`)
 - ✅ Pipeline (`pipeline_xxx.py`)
 - ✅ Registry entries in `registry.py`
 - ✅ `__init__.py` with proper exports
 
-### 2. Example and Tests
+**2. Example and Tests**
 
 - ✅ Example script in `examples/`
 - ✅ Test file in `tests/e2e/`
 - ✅ Documentation (`docs/`) creation or updates
 
 _Note: End-to-end test files in `tests/e2e/` are optional but strongly recommended. README updates are required for all new models._
-### 3. Documentation Updates
+
+**3. Documentation Updates**
 
 - ✅ Add model to supported models table in `docs/models/supported_models.md`
 - ✅ If supporting acceleration features (e.g., sequence parallelism, CFG parallel), update acceleration feature tables in:
   - `docs/user_guide/diffusion_acceleration.md`
   - `docs/user_guide/diffusion/parallelism_acceleration.md`
 
+---
 
-### Model Recipe
+## Model Recipe
 
 After implementing and testing your model, please add a model recipe to the [vllm-project/recipes](https://github.com/vllm-project/recipes) repository. This helps other users understand how to use your model with vLLM-Omni.
 
-### What to Include
+**What to Include**
 
 Your recipe should include:
 
@@ -896,11 +902,11 @@ Your recipe should include:
 3. **Usage Examples**: Command-line examples demonstrating how to run the model
 4. **Configuration Details**: Important configuration parameters and their meanings
 
-### Example
+**Example**
 
 For reference, see the [LongCat recipe example](https://github.com/vllm-project/recipes/pull/179) which demonstrates the expected format and structure.
 
-### Recipe Location
+**Recipe Location**
 
 Create your recipe file in the appropriate directory structure:
 - For organization-specific models: `OrganizationName/ModelName.md`

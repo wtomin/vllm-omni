@@ -264,32 +264,8 @@ python text_to_image.py \
 
 ## Troubleshooting
 
-### Issue: SP not activating
 
-**Symptoms:** Generation still using full sequence on single GPU, no memory savings.
-
-**Causes & Solutions:**
-
-1. **SP world size not set:**
-   ```bash
-   # Check SP configuration
-   python -c "from vllm_omni.diffusion.distributed.parallel_state import get_sequence_parallel_world_size; print(get_sequence_parallel_world_size())"
-
-   # Should print N for N-way SP, 1 for no SP
-   ```
-
-   **Solution:** Initialize with `sequence_parallel_size=N`:
-   ```python
-   from vllm_omni.diffusion.distributed import initialize_model_parallel
-   initialize_model_parallel(sequence_parallel_size=2)
-   ```
-
-2. **`_sp_plan` not defined:**
-
-   **Solution:** Add `_sp_plan` class attribute to your transformer.
-
-
-### Issue: Shape mismatch errors
+**Issue: Shape mismatch errors**
 
 **Symptoms:** `RuntimeError: shape mismatch` during forward pass.
 
@@ -322,7 +298,7 @@ python text_to_image.py \
    ```
 
 
-### Issue: Inline operations not sharded
+**Issue: Inline operations not sharded**
 
 **Symptoms:** Some tensors remain full-sized, not sharded.
 

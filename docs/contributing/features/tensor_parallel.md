@@ -286,4 +286,4 @@ Adding Tensor Parallel support to a transformer:
 1. ✅ **Identify linear layers** - Which layers should be sharded?
 2. ✅ **Replace with parallel layers** - Use QKVParallelLinear, ColumnParallelLinear, RowParallelLinear
 3. ✅ **Validate TP constraints** - Ensure dimensions divisible by TP size
-4. ✅ **Test with valid `tp_size` - Check the memory usage, inference speed, and generative quality.
+4. ✅ **Test with valid `tp_size`** - Check the memory usage, inference speed, and generative quality.
