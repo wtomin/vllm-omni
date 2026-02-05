@@ -272,7 +272,7 @@ Please record the "e2e_time_ms" in the log and the generated result, and compare
    initialize_model_parallel(cfg_parallel_size=2)
    ```
 
-2. **`CFG is not enabled**
+2. **CFG is not enabled**
 
    **Solution:** Ensure `guidance_scale > 1.0` and negative prompt is provided:
    ```python
