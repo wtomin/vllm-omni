@@ -188,7 +188,7 @@ class QwenImagePipeline(QwenImageCFGParallelMixin, DiffusionPipeline):
 
 ### Override `predict_noise()` for Custom Transformer Calls
 
-If your transformer requires custom prediction function, you can rewrite `predict_noise` function. Taking wan2.2 as an example, which as two transformer models.
+If your transformer requires custom prediction function, you can rewrite `predict_noise` function. Taking wan2.2 as an example, which has two transformer models.
 
 ```python
 class Wan22Pipeline(nn.Module, CFGParallelMixin):
