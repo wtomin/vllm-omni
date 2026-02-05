@@ -35,7 +35,7 @@ tp_size = get_tensor_model_parallel_world_size()
 
 ### Parallel Layers
 
-Tensor Parallel uses two fundamental strategies for sharding linear layers by splitting the weight matrix:
+Tensor Parallel uses parallel linear layers from vLLM:
 
 **1. `ColumnParallelLinear`**
 
