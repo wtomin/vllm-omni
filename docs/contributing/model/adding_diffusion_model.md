@@ -707,7 +707,7 @@ See detailed guide: [How to add Tensor Parallel support](../features/tensor_para
 **Quick setup:**
 
 1. Replace Linear layers by various parallel linear layers (e.g., `ColumnParallelLinear`) in vLLM
-2. Check `tp_size` validity: dimension needs to be divisible by `tp_size`
+2. Check `tp_size` validity: `hidden_dim`, `num_heads`, and `num_kv_heads` must be divisible by `tp_size`
 
 **Usage:** Set `tensor_parallel_size` when initializing:
 ```python
