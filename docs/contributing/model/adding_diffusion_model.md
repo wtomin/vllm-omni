@@ -868,9 +868,10 @@ When submitting a PR to add your model, include:
 ### 2. Example and Tests
 
 - ✅ Example script in `examples/`
-- ✅ Test file in `tests/e2e/` (optional)
-- ✅ README documentation creation or updates (required)
+- ✅ Test file in `tests/e2e/`
+- ✅ README documentation creation or updates
 
+_Note: End-to-end test files in `tests/e2e/` are optional but strongly recommended. README updates are required for all new models._
 ### 3. Documentation Updates
 
 - ✅ Add model to supported models table in `docs/models/supported_models.md`
