@@ -28,6 +28,21 @@ The `_sp_plan` mechanism allows SP **without modifying `forward()` logic**. The 
 3. Hooks shard/gather tensors at specified module boundaries
 4. Attention layers handle cross-GPU communication internally
 
+An example `_sp_plan` is shown as follows:
+```python
+class StandardTransformer(nn.Module):
+    _sp_plan = {
+        # Shard hidden_states at first transformer block input
+        "blocks.0": {
+            "hidden_states": SequenceParallelInput(split_dim=1, expected_dims=3),
+        },
+        # Gather at final output projection
+        "proj_out": SequenceParallelOutput(gather_dim=1, expected_dims=3),
+    }
+```
+`StandardTransformer` has a transformer blocks list `self.blocks = nn.ModuleList([...])`, and a projection output layer `self.proj_out`. The `_sp_plan` above defines that when SP is enabled, sharding the input tensor to the first transformer block, and gathering the sharded tensor at the final output projection layer.
+
+
 **Requirements:**
 - Tensor operations that need sharding/gathering must happen at **`nn.Module` boundaries**
 - Inline Python operations (e.g., `torch.cat`, `pad_sequence`) **cannot be hooked**
@@ -76,12 +91,12 @@ class MyTransformer(nn.Module):
         self.proj_out = Linear()             # ← Boundary 4
 
     def forward(self, x):
-        x = self.patch_embed(x)              # ← Shard after this?
+        x = self.patch_embed(x)              # ← Shard before this?
         pos = self.pos_embed(x)              # ← Shard RoPE outputs?
         for block in self.blocks:
             x = block(x, pos)                # ← Blocks process sharded x
         x = self.norm_out(x)
-        output = self.proj_out(x)            # ← Gather before this?
+        output = self.proj_out(x)            # ← Gather after this?
         return output
 ```
 
@@ -151,7 +166,7 @@ from vllm_omni.diffusion.distributed.sp_plan import (
 | `split_dim` | int | Dimension to split (usually `1` for sequence) |
 | `expected_dims` | int \| None | Expected tensor rank for validation (optional) |
 | `split_output` | bool | `False`: shard **input** params; `True`: shard **output** tensors |
-| `auto_pad` | bool | Auto-pad if sequence not divisible by world_size (default: False) |
+| `auto_pad` | bool | Auto-pad if sequence not divisible by world_size (default: `False`) |
 
 **SequenceParallelOutput parameters:**
 
@@ -223,7 +238,7 @@ class TransformerWithRoPE(nn.Module):
 
 After implementing Sequence Parallel support, thoroughly test your implementation to ensure correctness and performance across different configurations.
 
-### Test Different `sp_size`
+**Test Different `sp_size`**
 
 Test your model with various sequence parallel world sizes to verify correctness and identify optimal configurations. For example, run text-to-image inference script:
 
@@ -244,7 +259,7 @@ python text_to_image.py \
 - **Correctness:** Output should be identical across all `sp_size` values
 - **Speed:** Throughput should remain stable or improve (especially for large sequences)
 
-### Test Different Combinations with Other Parallel Methods
+**Test Different Combinations with Other Parallel Methods**
 
 Sequence Parallel can be combined with other parallelism strategies. Test these combinations to ensure compatibility.
 
@@ -318,6 +333,13 @@ class ConcatModule(nn.Module):
         return torch.cat([x, cap], dim=1)
 
 class MyModel(nn.Module):
+    _sp_plan = {
+       "concat": {
+           0: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
+           1: SequenceParallelInput(split_dim=1, expected_dims=4, split_output=True),
+       },
+       ...
+    }
     def __init__(self):
         self.concat = ConcatModule()  # Now hookable!
 
