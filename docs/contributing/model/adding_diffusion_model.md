@@ -880,7 +880,7 @@ _Note: End-to-end test files in `tests/e2e/` are optional but strongly recommend
   - `docs/user_guide/diffusion/parallelism_acceleration.md`
 
 
-## 5. Model Recipe
+### Model Recipe
 
 After implementing and testing your model, please add a model recipe to the [vllm-project/recipes](https://github.com/vllm-project/recipes) repository. This helps other users understand how to use your model with vLLM-Omni.
 
