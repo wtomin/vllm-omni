@@ -210,7 +210,7 @@ class Wan22Pipeline(nn.Module, CFGParallelMixin):
 
 ### Override `cfg_normalize_function()` for Custom Normalization
 
-Some models has its own normalization function. Taking LongCat Image model as an example
+Some models have their own normalization function. Taking LongCat Image model as an example
 
 ```python
 class LongCatImagePipeline(nn.Module, CFGParallelMixin):
