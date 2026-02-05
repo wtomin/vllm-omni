@@ -26,7 +26,7 @@ tp_size = get_tensor_model_parallel_world_size()
 ```
 
 **Returns:**
-- `1` - TP is not enabled (single GPU or before initialization)
+- `1` - TP is not enabled (single GPU )
 - `N` - Running with N-way tensor parallelism (N GPUs)
 
 ---
