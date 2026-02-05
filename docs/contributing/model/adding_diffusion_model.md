@@ -604,7 +604,7 @@ If your model is one of Text-to-Image, Text-to-Audio, Text-to-Video, Image-to-Im
 
 If new CLI arguments need to be added, please edit the offline inference script corresponding to your model category from the table above, and update the example inference script in its corresponding document file (e.g., `examples/offline_inference/text_to_video/text_to_video.md`).
 
-For online inference examples, please check `examples/online_inference/TASK_NAME` and update the document file accordingly.
+For online inference, all the supported tasks are listed in `docs/user_guide/examples/online_serving/`. If your model falls into these categories, please check the corresponding documentation in this folder and the example at `examples/online_serving/TASK_NAME`. Update them accordingly if needed.
 
 ---
 
@@ -869,7 +869,7 @@ When submitting a PR to add your model, include:
 
 - ✅ Example script in `examples/`
 - ✅ Test file in `tests/e2e/`
-- ✅ README documentation creation or updates
+- ✅ Documentation (`docs/`) creation or updates
 
 _Note: End-to-end test files in `tests/e2e/` are optional but strongly recommended. README updates are required for all new models._
 ### 3. Documentation Updates
