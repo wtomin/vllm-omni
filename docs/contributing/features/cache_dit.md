@@ -309,7 +309,7 @@ omni = Omni(
     model="your-model-name",
     cache_backend="cache_dit",
     cache_config={
-        "Fn_compute_blocks": 1,Cache-dit enabled successfully on
+        "Fn_compute_blocks": 1,
         "Bn_compute_blocks": 0,
         "max_warmup_steps": 4,
         "residual_diff_threshold": 0.24,
