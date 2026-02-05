@@ -312,7 +312,7 @@ python text_to_image.py \
 
 2. **Sequence Length not divisible by sp_size:**
 
-   **Problem:** SequenceParallelInput(auto_pad=False) auto_pad should be True to enable automatic sequence paradding
+   **Problem:** SequenceParallelInput(auto_pad=False) auto_pad should be True to enable automatic sequence padding
 
    **Solution:** In `SequenceParallelInput`, set `auto_pad=True`:
    ```python
