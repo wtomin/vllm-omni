@@ -1,8 +1,10 @@
 # How to add CFG-Parallel support for a new pipeline
 
-This section describes how to add CFG-Parallel (Classifier-Free Guidance Parallel) to a diffusion **pipeline**. We use the Qwen-Image pipeline as the reference implementation.
+This section describes how to add CFG-Parallel (Classifier-Free Guidance Parallel) to a diffusion pipeline. We use the Qwen-Image pipeline as the reference implementation.
 
-**Table of Contents**
+---
+
+## Table of Contents
 
 - [Overview](#overview)
 - [Step-by-Step Implementation](#step-by-step-implementation)
@@ -209,18 +211,18 @@ python text_to_image.py \
 
 **Causes & Solutions:**
 
-1. **CFG is not enabled:**
+- **CFG is not enabled:**
 
-   **Problem:** Guidance scale too low or negative prompt not provided.
+**Problem:** Guidance scale too low or negative prompt not provided.
 
-   **Solution:** Ensure `guidance_scale > 1.0` and negative prompt is provided:
-   ```python
-   images = pipeline(
-       prompt="a cat",
-       negative_prompt="",  # Must provide (even if empty)
-       guidance_scale=3.5,   # Must be > 1.0
-   )
-   ```
+**Solution:** Ensure `guidance_scale > 1.0` and negative prompt is provided:
+```python
+images = pipeline(
+    prompt="a cat",
+    negative_prompt="",  # Must provide (even if empty)
+    guidance_scale=3.5,   # Must be > 1.0
+)
+```
 
 ---
 
