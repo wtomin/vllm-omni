@@ -325,7 +325,15 @@ class YourModelPipeline(nn.Module):
 + ) -> DiffusionOutput:  # ← Add return type
 ```
 
-[`OmniDiffusionRequest`](https://docs.vllm.ai/projects/vllm-omni/en/latest/api/vllm_omni/diffusion/request/#vllm_omni.diffusion.request.OmniDiffusionRequest) is a dataclass that contains the **prompts** and **sampling parameters** for the diffusion pipeline execution. It also contains a request_id for other components to trace this request and its outputs.
+[`OmniDiffusionRequest`](https://docs.vllm.ai/projects/vllm-omni/en/latest/api/vllm_omni/diffusion/request/#vllm_omni.diffusion.request.OmniDiffusionRequest) is a dataclass that contains the **prompts** and **sampling parameters** [`OmniDiffusionSamplingParams`](https://docs.vllm.ai/projects/vllm-omni/en/latest/api/vllm_omni/inputs/data/#vllm_omni.inputs.data.OmniDiffusionSamplingParams) for the diffusion pipeline execution. It also contains a request_id for other components to trace this request and its outputs.
+
+See some parameters in `OmniDiffusionSamplingParams` as follows:
+
+| parameters | type |value | function |
+|:---:|:---:|:---:|:---:|
+| `num_inference_steps` | `int` | 50 |  The number of diffusion steps during inference|
+| `guidance_scale` |  `float` | 0.0 |  The classifier free guidance scale |
+| `width` and `height` | `int` | None | The width and height of the generated image |
 
 **Extract parameters from request:**
 
