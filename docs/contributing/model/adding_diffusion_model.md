@@ -280,44 +280,24 @@ class YourModelPipeline(nn.Module):
         self.od_config = od_config
         self.parallel_config = od_config.parallel_config
         self.device = get_local_device()
-
         model = od_config.model
         local_files_only = os.path.exists(model)
 
         # Load components from checkpoint
         self.scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(
-            model,
-            subfolder="scheduler",
-            local_files_only=local_files_only,
-        )
-
+            model, subfolder="scheduler", local_files_only=local_files_only)
         self.text_encoder = CLIPTextModel.from_pretrained(
-            model,
-            subfolder="text_encoder",
-            local_files_only=local_files_only,
-        ).to(self.device)
-
+            model, subfolder="text_encoder", local_files_only=local_files_only).to(self.device)
         self.tokenizer = CLIPTokenizer.from_pretrained(
-            model,
-            subfolder="tokenizer",
-            local_files_only=local_files_only,
-        )
-
+            model, subfolder="tokenizer", local_files_only=local_files_only)
         self.vae = AutoencoderKL.from_pretrained(
-            model,
-            subfolder="vae",
-            local_files_only=local_files_only,
-        ).to(self.device)
+            model, subfolder="vae", local_files_only=local_files_only).to(self.device)
 
         # Initialize transformer with vLLM-Omni config
         transformer_kwargs = get_transformer_config_kwargs(
-            od_config.tf_model_config,
-            YourModelTransformer2DModel,
-        )
+            od_config.tf_model_config, YourModelTransformer2DModel)
         self.transformer = YourModelTransformer2DModel(
-            od_config=od_config,
-            **transformer_kwargs,
-        )
+            od_config=od_config, **transformer_kwargs)
 
         # Store VAE scale factor for latent space conversions
         self.vae_scale_factor = 2 ** (len(self.vae.config.block_out_channels) - 1)
@@ -340,17 +320,12 @@ class YourModelPipeline(nn.Module):
 - def __call__(
 + def forward(
     self,
-+   req: OmniDiffusionRequest,  # ← Add request parameter
-    prompt: str | list[str] = None,
-    negative_prompt: str | list[str] = None,
-    num_inference_steps: int = 50,
-    guidance_scale: float = 7.5,
-    height: int = 512,
-    width: int = 512,
-    **kwargs,
++   req: OmniDiffusionRequest,  # ← Add request parameter here
 - ):
 + ) -> DiffusionOutput:  # ← Add return type
 ```
+
+[`OmniDiffusionRequest`](https://docs.vllm.ai/projects/vllm-omni/en/latest/api/vllm_omni/diffusion/request/#vllm_omni.diffusion.request.OmniDiffusionRequest) is a dataclass that contains the **prompts** and **sampling parameters** for the diffusion pipeline execution. It also contains a request_id for other components to trace this request and its outputs.
 
 **Extract parameters from request:**
 
@@ -361,9 +336,6 @@ from vllm_omni.diffusion.data import DiffusionOutput
 def forward(
     self,
     req: OmniDiffusionRequest,
-    prompt: str | list[str] = None,
-    negative_prompt: str | list[str] = None,
-    **kwargs,
 ) -> DiffusionOutput:
     # Extract prompts from request
     if req.prompts is not None:
@@ -428,15 +400,6 @@ def get_your_model_post_process_func(
     image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
 
     def post_process_func(images: torch.Tensor):
-        """
-        Convert tensor images to PIL images.
-
-        Args:
-            images: Tensor of shape [B, C, H, W] in range [-1, 1]
-
-        Returns:
-            List of PIL images
-        """
         return image_processor.postprocess(images, output_type="pil")
 
     return post_process_func
@@ -461,17 +424,16 @@ def get_your_model_pre_process_func(
 
     image_processor = VaeImageProcessor(vae_scale_factor=vae_scale_factor)
 
-    def pre_process_func(images: list[Image.Image]):
-        """
-        Convert PIL images to latent tensors.
-
-        Args:
-            images: List of PIL images
-
-        Returns:
-            Preprocessed image tensor
-        """
-        return image_processor.preprocess(images)
+    def pre_process_func(
+        request: OmniDiffusionRequest,
+        ):
+        for i, prompt in enumerate(request.prompts):
+            multi_modal_data = prompt.get("multi_modal_data", {}) if not isinstance(prompt, str) else None
+            raw_image = multi_modal_data.get("image", None) if multi_modal_data is not None else None
+            # image pre-processing
+            # after pre-processing, update the request attributes
+            ...
+        return request
 
     return pre_process_func
 ```
