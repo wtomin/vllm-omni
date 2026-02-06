@@ -42,6 +42,7 @@ The Tensor Parallel implementation relies vLLM's Parallel Layers:
 
 ## Step-by-Step Implementation
 
+
 ### Step 1: Identify Linear Layers
 
 Find all `nn.Linear` layers in your transformer that need to be sharded.

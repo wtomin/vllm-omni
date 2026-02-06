@@ -153,6 +153,7 @@ class Wan22Pipeline(nn.Module, CFGParallelMixin):
         return current_model(**kwargs)[0]
 ```
 
+
 ### Override `cfg_normalize_function()` for Custom Normalization
 
 Some models have their own normalization function. Taking LongCat Image model as an example:

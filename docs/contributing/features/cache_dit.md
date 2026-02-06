@@ -239,7 +239,6 @@ images = omni.generate(
 
 **Solution:** Verify `pipeline.__class__.__name__` matches the registry key and add your enabler to `CUSTOM_DIT_ENABLERS`.
 
-
 ### Issue: Quality degradation
 
 **Symptoms:** Generated images have artifacts or lower quality compared to non-cached inference.

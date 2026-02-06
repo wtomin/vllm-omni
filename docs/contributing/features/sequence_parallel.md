@@ -18,6 +18,7 @@ This section describes how to add Sequence Parallel (SP) to a diffusion transfor
 
 ## Overview
 
+
 ### What is Sequence Parallel?
 
 **Terminology Note:** Our "Sequence Parallelism" (SP) corresponds to "Context Parallelism" (CP) in the [diffusers library](https://github.com/huggingface/diffusers/blob/main/src/diffusers/models/_modeling_parallel.py). We use "Sequence Parallelism" to align with vLLM-Omni's terminology.

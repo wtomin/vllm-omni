@@ -156,7 +156,7 @@ Create a callable that executes all transformer blocks. This encapsulates the ma
 
 **Key Points:**
 
-- Return format: 
+- Return format:
 - For single-stream models: return `(hidden_states,)`
 - For dual-stream models: return `(hidden_states, encoder_hidden_states)`
 
@@ -238,6 +238,7 @@ _MODEL_COEFFICIENTS = {
     ],
 }
 ```
+
 
 **Initial approach:** Start with coefficients from a similar model architecture, then tune empirically following [Customization](#customization) section.
 
