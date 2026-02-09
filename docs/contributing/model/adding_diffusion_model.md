@@ -361,9 +361,17 @@ def forward(
 
     # For image editing pipelines, extract images from multi_modal_data
     if hasattr(req, 'multi_modal_data') and req.multi_modal_data:
-        input_images = req.multi_modal_data.get('images', [])
+        input_images = req.multi_modal_data.get('image', [])
 
     # ... rest of generation logic
+```
+
+For an image editing model, an example `OmniDiffusionRequest` is like:
+```python
+{
+    "prompt": "turn this cat to a dog",
+    "multi_modal_data": {"image": input_image}
+},
 ```
 
 **Wrap output:**
