@@ -47,7 +47,7 @@ nav:
     - contributing/model/README.md
     - contributing/model/adding_omni_model.md
     - contributing/model/adding_diffusion_model.md
-    - Advance Features:
+    - Advanced Features:
       - contributing/features/cfg_parallel.md
       - contributing/features/sequence_parallel.md
       - contributing/features/tensor_parallel.md
