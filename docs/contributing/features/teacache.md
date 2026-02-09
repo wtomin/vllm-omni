@@ -1,4 +1,4 @@
-# How to add TeaCache support for a new model
+# Support TeaCache
 
 This section describes how to add TeaCache to a diffusion transformer model. We use the Qwen-Image transformer as the reference implementation.
 

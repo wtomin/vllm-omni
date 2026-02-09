@@ -1,4 +1,4 @@
-# How to add CFG-Parallel support for a new pipeline
+# Support CFG-Parallel
 
 This section describes how to add CFG-Parallel (Classifier-Free Guidance Parallel) to a diffusion pipeline. We use the Qwen-Image pipeline as the reference implementation.
 

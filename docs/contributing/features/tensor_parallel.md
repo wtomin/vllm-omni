@@ -1,4 +1,4 @@
-# How to add Tensor Parallel support for a new model
+# Support Tensor Parallel
 
 This section describes how to add Tensor Parallel (TP) to a diffusion transformer model. We use the Z-Image transformer as the reference implementation.
 
