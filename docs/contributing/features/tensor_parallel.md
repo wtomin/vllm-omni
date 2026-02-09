@@ -66,6 +66,7 @@ class FeedForward(nn.Module):
             dim,
             hidden_dim,
             bias=False,
+            return_bias=False,
         )
         self.act = nn.GELU()
 
@@ -74,6 +75,7 @@ class FeedForward(nn.Module):
             dim,
             bias=False,
             input_is_parallel=True,  # Input already sharded from w1
+            return_bias=False,
         )
 
     def forward(self, x):
@@ -90,7 +92,8 @@ class FeedForward(nn.Module):
 **Example (Attention - QKV-Out Pattern):**
 
 ```python
-class Attention(nn.Module):
+from vllm_omni.diffusion.attention.layer import Attention
+class YourModelAttention(nn.Module):
     def __init__(self, dim: int, num_heads: int, num_kv_heads: int):
         super().__init__()
         self.head_dim = dim // num_heads
@@ -103,6 +106,7 @@ class Attention(nn.Module):
             total_num_heads=num_heads,
             total_num_kv_heads=num_kv_heads,
             bias=False,
+            return_bias=False,
         )
 
         # Row parallel: output weight split by rows
@@ -111,11 +115,15 @@ class Attention(nn.Module):
             dim,
             bias=False,
             input_is_parallel=True,  # Input sharded from attention
+            return_bias=False,
         )
 
         self.attn = Attention(
-            num_heads=num_heads // tp_size,  # Local heads per GPU
+            num_heads=self.to_qkv.num_heads, # Each GPU gets num_heads/N heads
             head_size=self.head_dim,
+            softmax_scale=1.0 / (self.head_dim**0.5),
+            causal=False,
+            num_kv_heads=self.to_qkv.num_kv_heads,
         )
 
     def forward(self, x):
@@ -143,7 +151,6 @@ For correct TP operation, these dimensions **must be divisible** by `tensor_para
 
 | Dimension | Reason | Example Error |
 |-----------|--------|---------------|
-| `ffn_hidden_dim` | FFN hidden dimension sharded by ColumnParallel | `ffn_hidden_dim=3840, tp=3` ❌ (3840 % 3 ≠ 0) |
 | `num_heads` | Heads sharded by QKVParallelLinear | `num_heads=30, tp=4` ❌ (30 % 4 ≠ 0) |
 | `num_kv_heads` | KV heads sharded by QKVParallelLinear | `num_kv_heads=30, tp=4` ❌ (30 % 4 ≠ 0) |
 
@@ -224,11 +231,12 @@ self.proj = RowParallelLinear(dim, dim, input_is_parallel=True)
 **Solution:** Set `input_is_parallel=True` when input comes from ColumnParallelLinear:
 ```python
 # ✅ GOOD: Correct pairing
-self.w1 = ColumnParallelLinear(dim, hidden_dim)
+self.w1 = ColumnParallelLinear(dim, hidden_dim, return_bias=False,)
 self.w2 = RowParallelLinear(
     hidden_dim,
     dim,
     input_is_parallel=True,  # Input sharded from w1
+    return_bias=False,
 )
 ```
 
