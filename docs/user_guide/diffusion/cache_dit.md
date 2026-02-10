@@ -77,7 +77,25 @@ python text_to_image.py \
     --num_inference_steps 50
 ```
 
-See the [complete example](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/text_to_image/text_to_image.py) below for detailed configuration options.
+See the [text_to_image.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/text_to_image/text_to_image.py) for detailed configuration options.
+
+For image-to-image tasks, use the example script under `examples/offline_inference/image_to_image`:
+
+```bash
+cd examples/offline_inference/image_to_image
+python image_edit.py \
+    --model Qwen/Qwen-Image-Edit \
+    --prompt "make the sky more colorful" \
+    --image-path path/to/input/image.jpg \
+    --cache_backend cache_dit \
+    --num-inference-steps 50 \
+    --cache_dit_max_continuous_cached_steps 3 \
+    --cache_dit_residual_diff_threshold 0.24 \
+    --cache_dit_enable_taylorseer
+```
+
+See the [image_edit.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/image_to_image/image_edit.py) for detailed configuration options.
+
 
 ### Online Serving
 
