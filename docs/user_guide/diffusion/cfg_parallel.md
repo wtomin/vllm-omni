@@ -23,8 +23,6 @@ See supported models list in [Supported Models](../diffusion_features.md#support
 
 ## Quick Start
 
-Using python API
-
 ### Basic Usage
 
 Simplest working example:
