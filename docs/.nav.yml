@@ -46,8 +46,11 @@ nav:
         - Overview: user_guide/diffusion/quantization/overview.md
         - FP8: user_guide/diffusion/quantization/fp8.md
       - Cache-DiT: user_guide/diffusion/cache_dit.md
-      - Parallelism Acceleration: user_guide/diffusion/parallelism_acceleration.md
+      - Tensor Parallel: user_guide/diffusion/tensor_parallel.md
+      - Sequence Parallel: user_guide/diffusion/sequence_parallel.md
+      - CFG Parallel: user_guide/diffusion/cfg_parallel.md
       - CPU Offloading: user_guide/diffusion/cpu_offload_diffusion.md
+      - LoRA Inference: user_guide/diffusion/lora_inference.md
     - ComfyUI: features/comfyui.md
 - Developer Guide:
   - General:
