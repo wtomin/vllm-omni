@@ -17,6 +17,8 @@
 
 TeaCache accelerates diffusion model inference by caching transformer computations when consecutive timesteps are similar, providing **1.5x-2.0x speedup** with minimal quality loss. It dynamically decides whether to reuse cached outputs based on input similarity, making it ideal for production deployments where inference speed matters without sacrificing generation quality.
 
+See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+
 ---
 
 ## Quick Start

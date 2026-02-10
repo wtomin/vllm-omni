@@ -18,6 +18,8 @@
 
 Cache-DiT accelerates diffusion transformer models through intelligent caching mechanisms (DBCache, TaylorSeer, SCM), providing significant speedup with minimal quality loss. It's ideal for production deployments where inference speed matters and can be combined with other acceleration techniques for optimal performance.
 
+See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+
 ---
 
 ## Quick Start
