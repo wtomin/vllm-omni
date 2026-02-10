@@ -1,28 +1,55 @@
-# TeaCache Configuration Guide
+# TeaCache Guide
 
-TeaCache speeds up diffusion model inference by caching transformer computations when consecutive timesteps are similar. This typically provides **1.5x-2.0x speedup** with minimal quality loss.
+
+## Table of Content
+
+- [Overview](#overview)
+- [Quick Start](#quick-start)
+- [Example Script](#example-script)
+- [Configuration Parameters](#configuration-parameters)
+- [Best Practices](#best-practices)
+- [Troubleshooting](#troubleshooting)
+- [Summary](#summary)
+
+---
+
+## Overview
+
+TeaCache accelerates diffusion model inference by caching transformer computations when consecutive timesteps are similar, providing **1.5x-2.0x speedup** with minimal quality loss. It dynamically decides whether to reuse cached outputs based on input similarity, making it ideal for production deployments where inference speed matters without sacrificing generation quality.
+
+---
 
 ## Quick Start
 
-Enable TeaCache by setting `cache_backend` to `"tea_cache"`:
+
+
+### Basic Usage
+
 
 ```python
 from vllm_omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-# Simple configuration - model_type is automatically extracted from pipeline.__class__.__name__
+omni = Omni(
+    model="Qwen/Qwen-Image",
+    cache_backend="tea_cache",
+)
+
+outputs = omni.generate(
+    "A cat sitting on a windowsill",
+    OmniDiffusionSamplingParams(num_inference_steps=50),
+)
+```
+
+### Custom Configuration
+
+```python
 omni = Omni(
     model="Qwen/Qwen-Image",
     cache_backend="tea_cache",
     cache_config={
-        "rel_l1_thresh": 0.2  # Optional, defaults to 0.2
-    }
-)
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-    ),
+        "rel_l1_thresh": 0.2,  # Controls speed/quality tradeoff
+    },
 )
 ```
 
@@ -41,105 +68,116 @@ from vllm_omni import Omni
 
 omni = Omni(
     model="Qwen/Qwen-Image",
-    cache_config={"rel_l1_thresh": 0.2}  # Optional
+    cache_config={"rel_l1_thresh": 0.2}
 )
 ```
 
-## Online Serving (OpenAI-Compatible)
+---
 
-Enable TeaCache for online serving by passing `--cache-backend tea_cache` when starting the server:
+## Example Script
+
+### Offline Inference
+
+Use python script under `examples/offline_inference/text_to_image/` or `examples/offline_inference/image_to_image/` with CLI:
 
 ```bash
+# Text-to-image example
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model Qwen/Qwen-Image \
+  --cache_backend tea_cache \
+
+# Image-to-image example
+python examples/offline_inference/image_to_image/image_edit.py \
+  --model Qwen/Qwen-Image-Edit \
+  --image input.png \
+  --prompt "Edit description" \
+  --cache_backend tea_cache \
+  --tea_cache_rel_l1_thresh 0.25
+```
+
+See the [text_to_image.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/text_to_image/text_to_image.py) or [image_edit.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/image_to_image/image_edit.py) for detailed configuration options.
+
+### Online Serving
+
+```bash
+# Default configuration
+vllm serve Qwen/Qwen-Image --omni --port 8091 --cache-backend tea_cache
+
+# Custom configuration
 vllm serve Qwen/Qwen-Image --omni --port 8091 \
   --cache-backend tea_cache \
   --cache-config '{"rel_l1_thresh": 0.2}'
 ```
 
+---
+
 ## Configuration Parameters
 
-### `rel_l1_thresh` (float, default: `0.2`)
+In `OmniDiffusionConfig`
 
-Controls the balance between speed and quality. Lower values prioritize quality, higher values prioritize speed.
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `rel_l1_thresh` | float | `0.2` | Similarity threshold for cache reuse. Lower values prioritize quality (less caching), higher values prioritize speed (more caching). Range: 0.1-0.8 |
 
-**Recommended values:**
 
-- `0.2` - **~1.5x speedup** with minimal quality loss (recommended)
-- `0.4` - **~1.8x speedup** with slight quality loss
-- `0.6` - **~2.0x speedup** with noticeable quality loss
-- `0.8` - **~2.25x speedup** with significant quality loss
+---
 
-## Examples
+## Best Practices
 
-### Python API
+### When to Use
 
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+**Good for:**
+- Production deployments requiring faster inference
+- Scenarios where 1.5-2x speedup is valuable
+- Use cases tolerant of minimal quality loss
+- High-volume image generation workloads
 
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    cache_backend="tea_cache",
-    cache_config={"rel_l1_thresh": 0.2}
-)
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-    ),
-)
-```
+**Not for:**
+- Maximum quality requirements where no degradation is acceptable
+- Very short inference runs (< 20 steps) where caching overhead may outweigh benefits
+- Models not based on transformer architectures
 
-## Performance Tuning
 
-Start with the default `rel_l1_thresh=0.2` and adjust based on your needs:
+### Expected Performance
 
-- **Maximum quality**: Use `0.1-0.2`
-- **Balanced**: Use `0.2-0.4` (recommended)
-- **Maximum speed**: Use `0.6-0.8` (may reduce quality)
+| Configuration | Speedup | Quality | Use Case |
+|--------------|---------|---------|----------|
+| `rel_l1_thresh=0.2` | 1.5x-1.8x | Excellent | General use (recommended) |
+| `rel_l1_thresh=0.4` | 1.8x-2.0x | Good | Balanced speed/quality |
+| `rel_l1_thresh=0.6` | 2.0x-2.2x | Fair | Speed-critical |
+| `rel_l1_thresh=0.8` | 2.2x-2.5x | Reduced | Maximum speed |
+
+---
 
 ## Troubleshooting
 
-### Quality Degradation
+### Common Issue 1: Quality Degradation
 
-If you notice quality issues, lower the threshold:
+**Symptoms**: Generated images show artifacts, reduced detail, or inconsistent quality compared to non-cached results
+
+**Solution**:
 
 ```python
-cache_config={"rel_l1_thresh": 0.1}  # More conservative caching
+# Lower the threshold for more conservative caching
+cache_config={"rel_l1_thresh": 0.1}
 ```
 
-## Supported Models
+### Common Issue 2: Limited Speedup
 
-### ImageGen
+**Symptoms**: Actual speedup is less than expected (< 1.3x)
 
-<style>
-th {
-  white-space: nowrap;
-  min-width: 0 !important;
-}
-</style>
+**Solutions**:
+1. Increase the threshold to enable more aggressive caching:
+   ```python
+   cache_config={"rel_l1_thresh": 0.3}
+   ```
+2. Ensure you're using sufficient inference steps (50+ recommended)
+3. Check that your model architecture is supported (see Supported Models section)
 
-| Architecture | Models | Example HF Models |
-|--------------|--------|-------------------|
-| `QwenImagePipeline` | Qwen-Image | `Qwen/Qwen-Image` |
-| `QwenImageEditPipeline` | Qwen-Image-Edit | `Qwen/Qwen-Image-Edit` |
-| `QwenImageEditPlusPipeline` | Qwen-Image-Edit-2509 | `Qwen/Qwen-Image-Edit-2509` |
-| `QwenImageLayeredPipeline` | Qwen-Image-Layered | `Qwen/Qwen-Image-Layered` |
-| `BagelForConditionalGeneration` | BAGEL (DiT-only) | `ByteDance-Seed/BAGEL-7B-MoT` |
+---
 
-### VideoGen
 
-No VideoGen models are supported by TeaCache yet.
+## Summary
 
-### Coming Soon
-
-<style>
-th {
-  white-space: nowrap;
-  min-width: 0 !important;
-}
-</style>
-
-| Architecture | Models | Example HF Models |
-|--------------|--------|-------------------|
-| `FluxPipeline` | Flux | - |
-| `CogVideoXPipeline` | CogVideoX | - |
+1. ✅ **Enable TeaCache** - Set `cache_backend="tea_cache"` to get 1.5x-2.0x speedup with optimized defaults
+2. ✅ **(Optional) Customize** - Adjust `rel_l1_thresh` in `cache_config` for specific speed/quality trade-offs
