@@ -57,7 +57,7 @@ Extension methods add specialized capabilities to diffusion models beyond standa
 
 | Method | Description | Best For |
 |--------|-------------|----------|
-| **[LoRA Inference](examples/offline_inference/lora_inference.md)** | Enables inference with Low-Rank Adaptation (LoRA) adapters weights | Reinforcement learning extensions |
+| **[LoRA Inference](diffusion/lora_inference.md)** | Enables inference with Low-Rank Adaptation (LoRA) adapters weights | Reinforcement learning extensions |
 
 
 ### Quantization Methods
