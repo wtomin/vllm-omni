@@ -34,10 +34,10 @@ Parallelism methods distribute computation across GPUs without quality loss (mat
 
 | Method | Description | Best For |
 |--------|-------------|----------|
-| **[Ulysses-SP](diffusion/parallelism_acceleration.md#ulysses-sp)** | Sequence parallelism via all-to-all communication | High-resolution images (>1536px) or long videos with 2-8 GPUs |
-| **[Ring-Attention](diffusion/parallelism_acceleration.md#ring-attention)** | Sequence parallelism via ring-based communication | Videos, very long sequences, memory-constrained, with 2-8 GPUs |
-| **[CFG-Parallel](diffusion/parallelism_acceleration.md#cfg-parallel)** | Splits CFG positive/negative branches across devices | Image editing with CFG guidance (true_cfg_scale > 1) on 2 GPUs |
-| **[Tensor Parallelism](diffusion/parallelism_acceleration.md#tensor-parallel)** | Shards model weights across devices | Large models that don't fit in single GPU, with 2+ GPUs |
+| **[Ulysses-SP](diffusion/sequence_parallel.md)** | Sequence parallelism via all-to-all communication | High-resolution images (>1536px) or long videos with 2-8 GPUs |
+| **[Ring-Attention](diffusion/sequence_parallel.md)** | Sequence parallelism via ring-based communication | Videos, very long sequences, memory-constrained, with 2-8 GPUs |
+| **[CFG-Parallel](diffusion/cfg_parallel.md)** | Splits CFG positive/negative branches across devices | Image editing with CFG guidance (true_cfg_scale > 1) on 2 GPUs |
+| **[Tensor Parallelism](diffusion/tensor_parallel.md)** | Shards model weights across devices | Large models that don't fit in single GPU, with 2+ GPUs |
 
 **Note:** Some acceleration methods can be combined together for optimized performance. See [Combining Acceleration Methods](diffusion/combining_methods.md) for detailed configuration examples.
 
@@ -132,4 +132,3 @@ The following tables show which models support each acceleration method:
 
 **Advanced Topics:**
 - **[Combining Acceleration Methods](diffusion/combining_methods.md)** - How to use cache + parallelism together for maximum performance
-- **[Optimization & Troubleshooting Guide](diffusion/optimization_guide.md)** - Best practices, performance tuning, common issues and solutions
