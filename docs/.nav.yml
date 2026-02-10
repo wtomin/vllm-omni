@@ -51,6 +51,7 @@ nav:
       - CFG Parallel: user_guide/diffusion/cfg_parallel.md
       - CPU Offloading: user_guide/diffusion/cpu_offload_diffusion.md
       - LoRA Inference: user_guide/diffusion/lora_inference.md
+      - Feature Compatibility: user_guide/diffusion/feature_compatibility.md
     - ComfyUI: features/comfyui.md
 - Developer Guide:
   - General:

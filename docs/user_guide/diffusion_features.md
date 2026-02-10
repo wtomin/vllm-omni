@@ -5,6 +5,7 @@
 - [Overview](#overview)
 - [Supported Features](#supported-features)
 - [Supported Models](#supported-models)
+- [Feature Compatibility](#feature-compatibility)
 - [Learn More](#learn-more)
 
 ## Overview
@@ -39,7 +40,7 @@ Parallelism methods distribute computation across GPUs without quality loss (mat
 | **[CFG-Parallel](diffusion/cfg_parallel.md)** | Splits CFG positive/negative branches across devices | Image editing with CFG guidance (true_cfg_scale > 1) on 2 GPUs |
 | **[Tensor Parallelism](diffusion/tensor_parallel.md)** | Shards model weights across devices | Large models that don't fit in single GPU, with 2+ GPUs |
 
-**Note:** Some acceleration methods can be combined together for optimized performance. See [Combining Acceleration Methods](diffusion/combining_methods.md) for detailed configuration examples.
+**Note:** Some acceleration methods can be combined together for optimized performance. See [Feature Compatibility](diffusion/feature_compatibility.md) for detailed configuration examples.
 
 ### Memory Optimization
 
@@ -115,6 +116,25 @@ The following tables show which models support each acceleration method:
 | **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ |
 
 
+## Feature Compatibility
+
+**Legend:**
+- ✅: Fully supported and tested
+- ❌: No support plan
+- ❓: Not verified yet, help wanted!
+
+|                      | TeaCache | Cache-DiT | Sequence Parallel | Tensor Parallel | CFG-Parallel | LoRA Inference |
+|----------------------|:--------:|:---------:|:-----------------:|:---------------:|:------------:|:--------------:|
+| **Cache-DiT**        |    ❌    |           |                   |                 |              |                |
+| **Sequence Parallel**|    ❓    |    ❓     |                   |                 |              |                |
+| **Tensor Parallel**  |    ❓    |    ❓     |        ❓         |                 |              |                |
+| **CFG-Parallel**     |    ❓    |    ❓     |        ❓         |       ❓        |              |                |
+| **LoRA Inference**   |    ❓    |    ❓     |        ❓         |       ❓        |      ❓      |                |
+| **CPU Offloading**   |    ❓    |    ❓     |        ❓         |       ❓        |      ❓      |       ❓       |
+
+**Note:** The table shows cross-compatibility between features. If you'd like to help verify untested combinations, please contribute test results to the project!
+
+
 ## Learn More
 
 **Cache Acceleration:**
@@ -128,7 +148,7 @@ The following tables show which models support each acceleration method:
 - **[CPU Offload Guide](diffusion/cpu_offload_diffusion.md)** - Offload model components to CPU, reduce GPU memory usage
 
 **Extensions:**
-- **[LoRA Inference Guide](examples/offline_inference/lora_inference.md)** - Low-Rank Adaptation for style customization and fine-tuning
+- **[LoRA Inference Guide](diffusion/lora_inference.md)** - Low-Rank Adaptation for style customization and fine-tuning
 
 **Advanced Topics:**
-- **[Combining Acceleration Methods](diffusion/combining_methods.md)** - How to use cache + parallelism together for maximum performance
+- **[Feature Compatibility](diffusion/feature_compatibility.md)** - How to use cache + parallelism together for maximum performance
