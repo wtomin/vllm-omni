@@ -75,8 +75,8 @@ cd examples/offline_inference/text_to_image
 python text_to_image.py \
     --model Qwen/Qwen-Image \
     --prompt "a cup of coffee on the table" \
-    --cache_backend cache_dit \
-    --num_inference_steps 50
+    --cache-backend cache_dit \
+    --num-inference-steps 50
 ```
 
 See the [text_to_image.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/text_to_image/text_to_image.py) for detailed configuration options.
@@ -89,11 +89,11 @@ python image_edit.py \
     --model Qwen/Qwen-Image-Edit \
     --prompt "make the sky more colorful" \
     --image-path path/to/input/image.jpg \
-    --cache_backend cache_dit \
+    --cache-backend cache_dit \
     --num-inference-steps 50 \
-    --cache_dit_max_continuous_cached_steps 3 \
-    --cache_dit_residual_diff_threshold 0.24 \
-    --cache_dit_enable_taylorseer
+    --cache-dit-max-continuous-cached-steps 3 \
+    --cache-dit-residual-diff-threshold 0.24 \
+    --cache-dit-enable-taylorseer
 ```
 
 See the [image_edit.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/image_to_image/image_edit.py) for detailed configuration options.

@@ -68,7 +68,7 @@ python -m examples.offline_inference.lora_inference.lora_inference \
     --prompt "A piece of cheesecake" \
     --lora-path /path/to/lora/ \
     --lora-scale 1.0 \
-    --num_inference_steps 50 \
+    --num-inference-steps 50 \
     --height 1024 \
     --width 1024 \
     --output output_preloaded.png
@@ -86,7 +86,7 @@ python -m examples.offline_inference.lora_inference.lora_inference \
     --prompt "A piece of cheesecake" \
     --lora-request-path /path/to/lora/ \
     --lora-scale 1.0 \
-    --num_inference_steps 50 \
+    --num-inference-steps 50 \
     --height 1024 \
     --width 1024 \
     --output output_per_request.png

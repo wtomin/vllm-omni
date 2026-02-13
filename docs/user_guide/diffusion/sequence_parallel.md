@@ -82,7 +82,7 @@ Use Python script under `examples/offline_inference/text_to_image/text_to_image.
 python examples/offline_inference/text_to_image/text_to_image.py \
     --model Qwen/Qwen-Image \
     --prompt "A cat sitting on a windowsill" \
-    --ulysess_degree 2 \
+    --ulysses-degree 2 \
     --width 2048 --height 2048
 ```
 
@@ -92,7 +92,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
 python examples/offline_inference/text_to_image/text_to_image.py \
     --model Qwen/Qwen-Image \
     --prompt "A cat sitting on a windowsill" \
-    --ring_degree 2 \
+    --ring-degree 2 \
     --width 2048 --height 2048
 ```
 
@@ -103,7 +103,7 @@ python examples/offline_inference/text_to_image/text_to_image.py \
 python examples/offline_inference/text_to_image/text_to_image.py \
     --model Qwen/Qwen-Image \
     --prompt "A cat sitting on a windowsill" \
-    --ulysess_degree 2 --ring_degree 2 \
+    --ulysses-degree 2 --ring-degree 2 \
     --width 2048 --height 2048
 ```
 

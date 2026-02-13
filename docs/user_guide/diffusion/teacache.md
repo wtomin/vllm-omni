@@ -86,15 +86,15 @@ Use python script under `examples/offline_inference/text_to_image/` or `examples
 # Text-to-image example
 python examples/offline_inference/text_to_image/text_to_image.py \
   --model Qwen/Qwen-Image \
-  --cache_backend tea_cache \
+  --cache-backend tea_cache \
 
 # Image-to-image example
 python examples/offline_inference/image_to_image/image_edit.py \
   --model Qwen/Qwen-Image-Edit \
   --image input.png \
   --prompt "Edit description" \
-  --cache_backend tea_cache \
-  --tea_cache_rel_l1_thresh 0.25
+  --cache-backend tea_cache \
+  --tea-cache-rel-l1-thresh 0.25
 ```
 
 See the [text_to_image.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/text_to_image/text_to_image.py) or [image_edit.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/image_to_image/image_edit.py) for detailed configuration options.

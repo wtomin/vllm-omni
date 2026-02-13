@@ -64,14 +64,14 @@ Use Python script under `examples/offline_inference`, and enable TP:
 # Text-to-Image with Qwen-Image
 python examples/offline_inference/text_to_image/text_to_image.py \
     --model Qwen/Qwen-Image \
-    --tensor_parallel_size 2
+    --tensor-parallel-size 2
 
 # Image Editing with Qwen-Image-Edit
 python examples/offline_inference/image_to_image/image_edit.py \
     --model Qwen/Qwen-Image-Edit \
     --image input.png \
     --prompt "Edit description" \
-    --tensor_parallel_size 2
+    --tensor-parallel-size 2
 ```
 
 ### Online Serving
