@@ -90,7 +90,7 @@ In `DiffusionParallelConfig`
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `cfg_parallel_size` | int | 1 | Number of GPUs for CFG parallelism. Set to 2 to enable (1 for positive, 1 for negative branch) |
+| `cfg_parallel_size` | int | 1 | Number of GPUs for CFG parallelism. Set to 2 to enable CFG-Parallel (rank 0 for positive, rank 1 for negative branch) |
 
 ---
 
@@ -99,25 +99,23 @@ In `DiffusionParallelConfig`
 ### When to Use
 
 **Good for:**
-- Image editing tasks with classifier-free guidance
-- Tasks requiring `true_cfg_scale > 1.0`
+
+- Tasks requiring classifier-free guidance
 - Multi-GPU setups (2 GPUs available)
-- Production deployments with CFG-enabled models
 - Combining with other parallelism methods (sequence/tensor parallel)
 
 **Not for:**
-- Text-to-image without CFG (`true_cfg_scale=1.0`)
+
 - Single GPU setups
 - Models that don't support CFG-Parallel (check [supported models](../diffusion_features.md#supported-models))
-- Workloads without negative prompts
-
+- Workloads without negative prompts or classifier-free guidance
+- Very short inference runs (< 20 steps) where parallelism overhead may outweigh benefits
 
 ### Expected Performance
 
 | Configuration | Speedup | Quality | Use Case |
 |--------------|---------|---------|----------|
-| CFG-Parallel (2 GPUs) | 1.8x | Excellent | Image editing with CFG |
-
+| CFG-Parallel (2 GPUs) | 1.5~1.8x | No degradation | Large model, VRAM limited |
 
 ---
 
