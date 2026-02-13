@@ -74,10 +74,13 @@ The following tables show which models support each acceleration method:
 - ✅ = Fully supported
 - ❌ = Not supported
 
+> Note:
+  CPU Offload has two methods: Model-level (default for models with DiT + text encoder) and Layerwise. The tables below show Layerwise support only.
+
 ### ImageGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload | LoRA Inference | VAE-Patch-Parallel | FP8-Quantization |
-|-------|------------------|:----------:|:-----------:|:-----------------:|:------------:|:---------------:|:-----------:|:-----------:|:------------------:|:----------------:|
+| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel | FP8-Quantization |
+|-------|------------------|:----------:|:-----------:|:-----------------:|:------------:|:---------------:|:-----------------------:|:-----------:|:------------------:|:----------------:|
 | **Bagel** | `ByteDance-Seed/BAGEL-7B-MoT` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
 | **FLUX.1-dev** | `black-forest-labs/FLUX.1-dev` | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ |
 | **FLUX.2-klein** | `black-forest-labs/FLUX.2-klein-4B` | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
@@ -95,16 +98,16 @@ The following tables show which models support each acceleration method:
 
 ### VideoGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload | LoRA Inference | VAE-Patch-Parallel |
-|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:-----------:|:-----------:|:------------------:|
+| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel |
+|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:-----------------------:|:-----------:|:------------------:|
 | **Wan2.2-T2V** | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Wan2.2-I2V** | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 | **Wan2.2-TI2V** | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 
 ### AudioGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload | LoRA Inference | VAE-Patch-Parallel |
-|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:-----------:|:-----------:|:------------------:|
+| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel |
+|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:-----------------------:|:-----------:|:------------------:|
 | **Stable-Audio-Open** | `stabilityai/stable-audio-open-1.0` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
 
 
