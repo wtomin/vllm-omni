@@ -107,14 +107,6 @@ The following tables show which models support each acceleration method:
 |-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:-----------:|:-----------:|:------------------:|
 | **Stable-Audio-Open** | `stabilityai/stable-audio-open-1.0` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
 
-### Quantization
-
-| Model | Model Identifier | FP8 |
-|-------|------------------|:---:|
-| **Qwen-Image** | `Qwen/Qwen-Image` | ✅ |
-| **Qwen-Image-2512** | `Qwen/Qwen-Image-2512` | ✅ |
-| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ |
-
 
 ## Feature Compatibility
 
@@ -142,13 +134,17 @@ The following tables show which models support each acceleration method:
 - **[Cache-DiT Advanced Guide](diffusion/cache_dit.md)** - DBCache, TaylorSeer, SCM techniques and optimization
 
 **Parallelism Methods:**
-- **[Parallelism Acceleration Guide](diffusion/parallelism_acceleration.md)** - Ulysses-SP, Ring-Attention, CFG-Parallel, Tensor Parallelism details
+- **[Tensor Parallelism Guide](diffusion/tensor_parallel.md)** - Shard DiT weights across GPUs to reduce per-GPU memory
+- **[Sequence Parallelism Guide](diffusion/sequence_parallel.md)** - Ulysses-SP and Ring-Attention for long sequence handling
+- **[CFG Parallelism Guide](diffusion/cfg_parallel.md)** - Distribute CFG positive/negative branches across GPUs
 
 **Memory Optimization:**
 - **[CPU Offload Guide](diffusion/cpu_offload_diffusion.md)** - Offload model components to CPU, reduce GPU memory usage
+- **[VAE Patch Parallelism Guide](diffusion/vae_patch_parallel.md)** - Distribute VAE decode tiling across GPUs for high-resolution images
+- **[Quantization Overview](diffusion/quantization/overview.md)** - Overview of quantization methods for diffusion models
 
 **Extensions:**
 - **[LoRA Inference Guide](diffusion/lora_inference.md)** - Low-Rank Adaptation for style customization and fine-tuning
 
 **Advanced Topics:**
-- **[Feature Compatibility](diffusion/feature_compatibility.md)** - How to use cache + parallelism together for maximum performance
+- **[Feature Compatibility](diffusion/feature_compatibility.md)** - How to combine cache + parallelism methods for maximum performance
