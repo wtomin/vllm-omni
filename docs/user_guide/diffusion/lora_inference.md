@@ -163,60 +163,9 @@ lora_adapter/
 ### When to Use
 
 **Good for:**
-- Serving multiple specialized models from a single base model
-- Personalized image generation (styles, characters, objects)
-- A/B testing different fine-tuned variants
-- Memory-efficient multi-tenant deployments
-- Style transfer and artistic adaptations
 
-**Not for:**
-- Completely different model architectures (use separate model deployments)
-- Scenarios where base model quality is already sufficient
-- Cases where full fine-tuning provides significantly better results
-
-### Recommended Configuration
-
-**For most use cases (balanced quality and efficiency):**
-```python
-omni = Omni(
-    model="stabilityai/stable-diffusion-3.5-medium",
-    lora_path="/path/to/lora/adapter",  # Pre-load frequently used adapters
-)
-
-outputs = omni.generate(
-    prompt="Your prompt here",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-        lora_request={"scale": 1.0},  # Standard scale
-    ),
-)
-```
-
-**For subtle style adjustments:**
-```python
-# Lower scale for more subtle effects
-lora_request={"path": "/path/to/lora/", "scale": 0.5}
-```
-
-**For strong style enforcement:**
-```python
-# Higher scale for stronger adapter influence
-lora_request={"path": "/path/to/lora/", "scale": 1.5}
-```
-
-### Performance Considerations
-
-| Approach | Memory Overhead | Loading Time | Use Case |
-|----------|----------------|--------------|----------|
-| Pre-loaded LoRA | ~10MB per adapter | At init (cached) | Frequently used adapters |
-| Per-request LoRA | ~10MB per adapter | First request (~1-2s) | Occasional use, many adapters |
-| No LoRA | 0MB | N/A | Base model only |
-
-**Tips:**
-- Pre-load frequently used adapters to avoid per-request loading overhead
-- Use LRU caching for managing multiple adapters (automatic in vLLM-Omni)
-- LoRA scale typically ranges from 0.5 to 1.5 for best results
-- Test different scales to find optimal balance for your use case
+- Personalized image/video generation (styles, characters, objects)
+- Reinforcement Learning integration
 
 ---
 
@@ -251,18 +200,6 @@ lora_request={"path": "/absolute/path/to/lora_adapter"}
    - Too low (<0.3): Minimal effect
 2. Verify adapter compatibility with the base model
 3. Ensure adapter was trained on compatible model architecture
-
-```python
-# Test different scales
-for scale in [0.5, 0.75, 1.0, 1.25, 1.5]:
-    outputs = omni.generate(
-        prompt="test prompt",
-        OmniDiffusionSamplingParams(
-            lora_request={"path": "/path/to/lora/", "scale": scale}
-        ),
-    )
-```
-
 
 ---
 
