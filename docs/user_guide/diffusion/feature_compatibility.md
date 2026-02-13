@@ -22,51 +22,22 @@ Combines cache acceleration with sequence parallelism for maximum speedup on sin
 
 **Using TeaCache + Ulysses-SP:**
 
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    cache_backend="tea_cache",
-    cache_config={"rel_l1_thresh": 0.2},
-    parallel_config=DiffusionParallelConfig(ulysses_degree=2)
-)
-
-outputs = omni.generate(
-    "A beautiful mountain landscape",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-        width=2048,
-        height=2048
-    ),
-)
+```bash
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model Qwen/Qwen-Image \
+  --prompt "A beautiful mountain landscape" \
+  --cache-backend tea_cache \
+  --ulysses-degree 2
 ```
 
 **Using Cache-DiT + Ring-Attention:**
 
-```python
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    cache_backend="cache_dit",
-    cache_config={
-        "Fn_compute_blocks": 1,
-        "Bn_compute_blocks": 0,
-        "max_warmup_steps": 8,
-        "residual_diff_threshold": 0.12,
-    },
-    parallel_config=DiffusionParallelConfig(ring_degree=4)
-)
-
-outputs = omni.generate(
-    "A futuristic city",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-        width=2048,
-        height=2048
-    ),
-)
+```bash
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model Qwen/Qwen-Image \
+  --prompt "A futuristic city" \
+  --cache-backend cache_dit \
+  --ring-degree 2
 ```
 
 ### 2. Cache + CFG-Parallel
@@ -75,31 +46,15 @@ Best for: **Image editing with Classifier-Free Guidance**
 
 Accelerates both the diffusion process and CFG computation.
 
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-from PIL import Image
-
-omni = Omni(
-    model="Qwen/Qwen-Image-Edit",
-    cache_backend="cache_dit",
-    parallel_config=DiffusionParallelConfig(cfg_parallel_size=2),
-)
-
-input_image = Image.open("input.png").convert("RGB")
-
-outputs = omni.generate(
-    {
-        "prompt": "make it sunset",
-        "negative_prompt": "low quality, blurry",
-        "multi_modal_data": {"image": input_image}
-    },
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-        true_cfg_scale=4.0,  # CFG-Parallel requires cfg_scale > 1
-    ),
-)
+```bash
+python examples/offline_inference/image_to_image/image_edit.py \
+  --model Qwen/Qwen-Image-Edit \
+  --prompt "make it sunset" \
+  --negative-prompt "low quality, blurry" \
+  --image input.png \
+  --cache-backend cache_dit \
+  --cfg-parallel-size 2 \
+  --true-cfg-scale 4.0
 ```
 
 ### 3. CFG-Parallel + Sequence Parallelism
@@ -110,55 +65,35 @@ Combines both CFG branch splitting and sequence parallelism for maximum GPU util
 
 **CFG-Parallel + Ulysses-SP:**
 
-```python
-omni = Omni(
-    model="Qwen/Qwen-Image-Edit",
-    cache_backend="cache_dit",
-    parallel_config=DiffusionParallelConfig(
-        cfg_parallel_size=2,
-        ulysses_degree=2  # Total 4 GPUs: 2 for CFG × 2 for sequence
-    ),
-)
-
-outputs = omni.generate(
-    {
-        "prompt": "transform into autumn scene",
-        "negative_prompt": "low quality",
-        "multi_modal_data": {"image": input_image}
-    },
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-        true_cfg_scale=4.0,
-        width=2048,
-        height=2048
-    ),
-)
+```bash
+python examples/offline_inference/image_to_image/image_edit.py \
+  --model Qwen/Qwen-Image-Edit \
+  --prompt "transform into autumn scene" \
+  --negative-prompt "low quality" \
+  --image input.png \
+  --cache-backend cache_dit \
+  --cfg-parallel-size 2 \
+  --ulysses-degree 2 \
+  --true-cfg-scale 4.0
 ```
 
-### 4. Hybrid Ulysses + Ring
+### 4. Hybrid Ulysses + Ring + Vae tiling
 
-Best for: **Very large images or videos on 8+ GPUs**
+Best for: **Very large images or videos on 4 GPUs**
 
 Combines Ulysses-SP (all-to-all) with Ring-Attention (ring P2P) for scalable parallelism.
 
-```python
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    cache_backend="cache_dit",
-    parallel_config=DiffusionParallelConfig(
-        ulysses_degree=2,
-        ring_degree=2  # Total 4 GPUs: 2 × 2
-    )
-)
-
-outputs = omni.generate(
-    "Epic fantasy landscape",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-        width=4096,
-        height=4096
-    ),
-)
+```bash
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model Qwen/Qwen-Image \
+  --prompt "Epic fantasy landscape" \
+  --cache-backend cache_dit \
+  --ulysses-degree 2 \
+  --ring-degree 2 \
+  --num-inference-steps 50 \
+  --width 2048 \
+  --height 2048 \
+  --vae-use-tiling
 ```
 
 ### 5. Cache + Tensor Parallelism
@@ -167,22 +102,13 @@ Best for: **Large models that don't fit in single GPU memory**
 
 Reduces per-GPU memory usage while maintaining cache acceleration.
 
-```python
-omni = Omni(
-    model="Tongyi-MAI/Z-Image-Turbo",
-    cache_backend="tea_cache",
-    cache_config={"rel_l1_thresh": 0.2},
-    parallel_config=DiffusionParallelConfig(tensor_parallel_size=2)
-)
-
-outputs = omni.generate(
-    "A cat reading a book",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=9,
-        width=512,
-        height=512
-    ),
-)
+```bash
+python examples/offline_inference/text_to_image/text_to_image.py \
+  --model Tongyi-MAI/Z-Image-Turbo \
+  --prompt "A cat reading a book" \
+  --cache-backend tea_cache \
+  --tensor-parallel-size 2 \
+  --num-inference-steps 9 \
 ```
 
 ## Online Serving
@@ -252,62 +178,11 @@ These are rough estimates. Actual performance varies by model, hardware, and con
 
 ### When to Combine Methods
 
-1. **Single GPU (<1536px images):**
-   - Use cache methods only (TeaCache or Cache-DiT)
-   - No need for parallelism methods
-
-2. **Multi-GPU (>1536px images):**
-   - Add Ulysses-SP or Ring-Attention
-   - Keep cache methods enabled
-
-3. **Image Editing with CFG:**
-   - Always enable CFG-Parallel when `true_cfg_scale > 1`
-   - Combine with cache methods
-
-4. **Very Large Models:**
-   - Enable Tensor Parallelism to fit in memory
-   - Add cache methods for speed
 
 ### Configuration Tips
 
-1. **Start Simple:**
-   - Enable cache first, validate quality
-   - Add parallelism methods incrementally
-   - Test each change
-
-2. **GPU Count Planning:**
-   - Total GPUs = `ulysses_degree × ring_degree × cfg_parallel_size × tensor_parallel_size`
-   - Example: `ulysses_degree=2, cfg_parallel_size=2` requires 4 GPUs
-
-3. **Memory vs Speed:**
-   - Ring-Attention: More memory-efficient, slightly slower than Ulysses-SP
-   - Ulysses-SP: Faster but higher memory usage
-   - Use hybrid for best balance
-
-4. **Cache Configuration:**
-   - Cache settings independent of parallelism
-   - Use same cache config as single-GPU
-
 ## Limitations
 
-### Known Constraints
-
-1. **Model Support:**
-   - Not all models support all parallelism methods
-   - Check [Supported Models](../diffusion_features.md#supported-models) table
-
-2. **Memory Overhead:**
-   - Text encoder not sharded in Tensor Parallelism (see [Issue #771](https://github.com/vllm-project/vllm-omni/issues/771))
-   - Each method adds some memory overhead
-
-3. **Communication Requirements:**
-   - Parallelism methods require fast inter-GPU communication
-   - Best with NVLink or InfiniBand
-   - Performance degrades with slow interconnects
-
-4. **Specific Model Limitations:**
-   - Z-Image: Only supports `tensor_parallel_size` of 1 or 2
-   - Some models don't support certain parallelism methods
 
 ## Troubleshooting
 
@@ -340,54 +215,6 @@ These are rough estimates. Actual performance varies by model, hardware, and con
 2. Check model supports all enabled methods
 3. Ensure divisibility constraints (e.g., Z-Image TP=1 or 2 only)
 
-## Examples
-
-### Complete Example: Maximum Acceleration
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-from PIL import Image
-
-# Setup: 4 GPUs, large resolution, CFG-enabled editing
-omni = Omni(
-    model="Qwen/Qwen-Image-Edit",
-    cache_backend="cache_dit",
-    cache_config={
-        "Fn_compute_blocks": 8,
-        "Bn_compute_blocks": 0,
-        "max_warmup_steps": 4,
-        "residual_diff_threshold": 0.12,
-        "enable_taylorseer": True,
-        "taylorseer_order": 1,
-    },
-    parallel_config=DiffusionParallelConfig(
-        cfg_parallel_size=2,  # 2 GPUs for CFG
-        ulysses_degree=2,     # 2 GPUs for sequence
-        # Total: 2 × 2 = 4 GPUs
-    )
-)
-
-input_image = Image.open("input.png").convert("RGB")
-
-outputs = omni.generate(
-    {
-        "prompt": "transform into a magical forest",
-        "negative_prompt": "low quality, blurry, distorted",
-        "multi_modal_data": {"image": input_image}
-    },
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-        true_cfg_scale=4.0,
-        width=2048,
-        height=2048
-    ),
-)
-```
-
 ## See Also
 
 - [Diffusion Acceleration Overview](../diffusion_features.md) - Main acceleration guide
-- [TeaCache Guide](teacache.md) - TeaCache configuration
-- [Cache-DiT Guide](cache_dit.md) - Cache-DiT configuration
