@@ -122,26 +122,16 @@ Additional requirements:
 ### When to Use
 
 **Good for:**
-- High-resolution image generation (≥1024x1024, especially ≥1152x1152)
+
+- High-resolution image generation and long video generation
 - Memory-constrained setups where VAE decode causes OOM
-- Multi-GPU environments with tensor parallelism enabled
-- Z-Image model with TP=2 (validated configuration)
-- Reducing VAE decode peak memory usage without sacrificing quality
+- Multi-GPU environments
 
 **Not for:**
-- Low-resolution images (<1024x1024) where VAE decode is not a bottleneck
-- Single GPU setups (adds unnecessary communication overhead)
-- Models not in the allowlist (currently only Z-Image is validated)
-- Scenarios where VAE decode memory is not a concern
 
-
-### Expected Performance
-
-| Configuration | Memory Reduction | Quality Impact | Use Case |
-|--------------|------------------|----------------|----------|
-| No VAE PP (single GPU) | Baseline | Perfect | VAE decode fits in memory |
-| VAE PP=2 | ~50% VAE peak | Negligible* | High-res generation, memory-constrained |
-| VAE PP=4 | ~75% VAE peak | Negligible* | Ultra-high-res, extreme memory constraints |
+- Low-resolution images/videos where VAE decode is not a bottleneck
+- Single GPU setups should use vae tiling decode, but not parallel vae tiling decode
+- Models not in the allowlist
 
 ---
 
@@ -194,6 +184,6 @@ _sequence_parallel_size = ulysses_degree × ring_degree_
 ## Summary
 
 1. ✅ **Enable VAE Patch Parallelism** - Set `vae_patch_parallel_size`， `vae_use_tiling=True` in `DiffusionParallelConfig` to reduce VAE decode peak memory
-2. ✅ **Use High Sequence** - VAE PP benefits are most apparent at ≥1152x1152
-4. ✅ **Combine with TP** - Use together with `tensor_parallel_size=2` for maximum memory savings
-5. ⚠️ **Check Model Support** - Currently validated for Z-Image only; verify in [supported models](../diffusion_features.md#supported-models)
+2. ✅ **Use Long Sequence** - VAE patch parallelism benefits are most apparent at long sequence decoding
+4. ✅ **Combine with other parallelism methods** - Suggest to use together with Tensor Parallel or CFG-Parallel for maximum memory savings
+5. ⚠️ **Check Model Support** - Verify in [supported models](../diffusion_features.md#supported-models) or `vllm_omni/diffusion/registry.py`
