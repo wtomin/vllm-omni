@@ -96,27 +96,14 @@ In `DiffusionParallelConfig`:
 ### When to Use
 
 **Good for:**
-- Large models that don't fit on a single GPU
+
+- Large models that don't fit on a single GPU, especially for models with large DiT blocks (transformer layers)
 - Memory-constrained environments
-- Multi-GPU setups where reducing per-GPU memory is critical
-- Models with large DiT blocks (transformer layers)
 
 **Not for:**
-- Small models that fit comfortably on single GPU (TP adds communication overhead)
+
 - When maximum throughput is needed and memory is sufficient
-- Models with incompatible dimensions (e.g., Z-Image only supports TP=1 or TP=2)
-
-
-### Expected Performance
-
-| Configuration | Memory per GPU | Speed | Use Case |
-|--------------|----------------|-------|----------|
-| No TP (single GPU) | 100% | Fastest | Model fits in memory |
-| TP=2 | ~50% | Good | Model barely OOM on single GPU |
-| TP=4 | ~25% | Slower | Very large models |
-
-!!! warning "Text Encoder Limitation"
-    Currently, the text encoder is **not sharded** with TP, so each GPU holds a full copy. This reduces the memory savings. See [Issue #771](https://github.com/vllm-project/vllm-omni/issues/771) for updates.
+- Models with incompatible dimensions (e.g., Z-Image `num_heads=30`, which now supports `tensor_parallel_size=2`)
 
 
 ## Troubleshooting
