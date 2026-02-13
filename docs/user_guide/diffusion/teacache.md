@@ -86,7 +86,7 @@ Use python script under `examples/offline_inference/text_to_image/` or `examples
 # Text-to-image example
 python examples/offline_inference/text_to_image/text_to_image.py \
   --model Qwen/Qwen-Image \
-  --cache-backend tea_cache \
+  --cache-backend tea_cache
 
 # Image-to-image example
 python examples/offline_inference/image_to_image/image_edit.py \
@@ -119,8 +119,26 @@ In `OmniDiffusionConfig`
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `rel_l1_thresh` | float | `0.2` | Similarity threshold for cache reuse. Lower values prioritize quality (less caching), higher values prioritize speed (more caching). Range: 0.1-0.8 |
+| `rel_l1_thresh` | float | `0.2` | Similarity threshold for cache reuse. Lower values prioritize quality (less caching), higher values prioritize speed (more caching). Suggested range: 0.1-0.8 |
+| `coefficients` | list[float] \| None | `None` | Polynomial coefficients for rescaling L1 distance. Must contain exactly 5 elements if provided. If `None`, uses model-specific defaults based on transformer type. |
 
+Users can find the default model coefficients in [`vllm_omni/diffusion/cache/teacache/config.py`](https://github.com/vllm-project/vllm-omni/blob/main/vllm_omni/diffusion/cache/teacache/config.py), for example:
+
+```python
+_MODEL_COEFFICIENTS = {
+    # Qwen-Image transformer coefficients from ComfyUI-TeaCache
+    # Tuned specifically for Qwen's dual-stream transformer architecture
+    # Used for all Qwen-Image Family pipelines, in general
+    "QwenImageTransformer2DModel": [
+        -4.50000000e02,
+        2.80000000e02,
+        -4.50000000e01,
+        3.20000000e00,
+        -2.00000000e-02,
+    ],
+    ...
+}
+```
 
 ---
 
@@ -129,15 +147,16 @@ In `OmniDiffusionConfig`
 ### When to Use
 
 **Good for:**
-- Production deployments requiring faster inference
+
+- Production deployments requiring faster inference, tolerant of minimal quality loss
 - Scenarios where 1.5-2x speedup is valuable
-- Use cases tolerant of minimal quality loss
-- High-volume image generation workloads
+- Useful for single-card acceleration
 
 **Not for:**
+
 - Maximum quality requirements where no degradation is acceptable
 - Very short inference runs (< 20 steps) where caching overhead may outweigh benefits
-- Models not based on transformer architectures
+
 
 
 ### Expected Performance
@@ -147,7 +166,12 @@ In `OmniDiffusionConfig`
 | `rel_l1_thresh=0.2` | 1.5x-1.8x | Excellent | General use (recommended) |
 | `rel_l1_thresh=0.4` | 1.8x-2.0x | Good | Balanced speed/quality |
 | `rel_l1_thresh=0.6` | 2.0x-2.2x | Fair | Speed-critical |
-| `rel_l1_thresh=0.8` | 2.2x-2.5x | Reduced | Maximum speed |
+| `rel_l1_thresh=0.8` | > 2.5x | Reduced | Maximum speed |
+
+
+!!! note
+    The expected speedup ratio in this table is for reference only. Please tune the parameters based on your model and generation cases.
+
 
 ---
 
@@ -171,9 +195,9 @@ cache_config={"rel_l1_thresh": 0.1}
 **Solutions**:
 1. Increase the threshold to enable more aggressive caching:
    ```python
-   cache_config={"rel_l1_thresh": 0.3}
+   cache_config={"rel_l1_thresh": 0.8}
    ```
-2. Ensure you're using sufficient inference steps (50+ recommended)
+2. Ensure you're using sufficient inference steps (35+ recommended)
 3. Check that your model architecture is supported (see Supported Models section)
 
 ---
@@ -182,4 +206,4 @@ cache_config={"rel_l1_thresh": 0.1}
 ## Summary
 
 1. ✅ **Enable TeaCache** - Set `cache_backend="tea_cache"` to get 1.5x-2.0x speedup with optimized defaults
-2. ✅ **(Optional) Customize** - Adjust `rel_l1_thresh` in `cache_config` for specific speed/quality trade-offs
+2. ✅ **(Optional) Customize** - Adjust thresholds and polynomial coefficients for specific speed/quality trade-offs
