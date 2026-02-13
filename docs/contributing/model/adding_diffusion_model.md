@@ -891,7 +891,6 @@ _Note: End-to-end test files in `tests/e2e/` are optional but strongly recommend
 - ✅ Add model to supported models table in `docs/models/supported_models.md`
 - ✅ If supporting acceleration features (e.g., sequence parallelism, CFG parallel), update acceleration feature tables in:
   - `docs/user_guide/diffusion_features.md`
-  - `docs/user_guide/diffusion/parallelism_acceleration.md`
 
 ---
 

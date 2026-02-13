@@ -67,7 +67,7 @@ Key arguments:
 - `--output`: Path to save the generated video.
 - `--vae-use-slicing`: Enable VAE slicing for memory optimization.
 - `--vae-use-tiling`: Enable VAE tiling for memory optimization.
-- `--cfg-parallel-size`: set it to 2 to enable CFG Parallel. See more examples in [`user_guide`](https://github.com/vllm-project/vllm-omni/tree/main/docs/user_guide/diffusion/parallelism_acceleration.md#cfg-parallel).
+- `--cfg-parallel-size`: set it to 2 to enable CFG Parallel. See more examples in [`user_guide`](../../diffusion/cache_dit.md).
 - `--enable-cpu-offload`: enable CPU offloading for diffusion models.
 
 > ℹ️ If you encounter OOM errors, try using `--vae-use-slicing` and `--vae-use-tiling` to reduce memory usage.
