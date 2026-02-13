@@ -49,8 +49,8 @@ Memory optimization methods help reduce GPU memory usage, enabling inference on 
 | Method | Description | Best For |
 |--------|-------------|----------|
 | **[CPU Offload](diffusion/cpu_offload_diffusion.md)** | Offloads model components to CPU memory | Limited VRAM, large models on consumer GPUs |
-| **[FP8 Quantization](diffusion/quantization/overview.md)** | Reduces DiT linear layers from BF16 to FP8 | Limited VRAM, accuracy perserved    |
-| **[VAE Patch Parallelism](diffusion/parallelism_acceleration.md#vae-patch-parallelism)** | run vae decode tiling across ranks | Reduced memory |
+| **[FP8 Quantization](diffusion/quantization/overview.md)** | Reduces DiT linear layers from BF16 to FP8 | Limited VRAM, accuracy preserved    |
+| **[VAE Patch Parallelism](diffusion/vae_patch_parallel.md)** | Distributes VAE decode tiling across GPUs | High-resolution generation with reduced VAE memory peak |
 
 ### Extensions
 

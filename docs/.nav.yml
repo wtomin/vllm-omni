@@ -49,6 +49,7 @@ nav:
       - Tensor Parallel: user_guide/diffusion/tensor_parallel.md
       - Sequence Parallel: user_guide/diffusion/sequence_parallel.md
       - CFG Parallel: user_guide/diffusion/cfg_parallel.md
+      - VAE Patch Parallel: user_guide/diffusion/vae_patch_parallel.md
       - CPU Offloading: user_guide/diffusion/cpu_offload_diffusion.md
       - LoRA Inference: user_guide/diffusion/lora_inference.md
       - Feature Compatibility: user_guide/diffusion/feature_compatibility.md
