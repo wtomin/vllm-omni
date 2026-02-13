@@ -76,6 +76,7 @@ nav:
     - Feature Design:
       - design/feature/disaggregated_inference.md
       - design/feature/ray_based_execution.md
+      - design/feature/cpu_offload.md
       - design/feature/omni_connectors/
     - Module Design:
       - design/module/ar_module.md
