@@ -43,6 +43,11 @@ def _get_world_rank_pp_size(
 ) -> tuple[int, int, int]:
     world_size = dist.get_world_size(group)
     rank = dist.get_rank(group)
+    if vae_patch_parallel_size > world_size:
+        logger.warning(
+            f"vae_patch_parallel_size={vae_patch_parallel_size} is greater than dit_group={world_size};"
+            f" using dit_group size={world_size}"
+        )
     pp_size = min(int(vae_patch_parallel_size), int(world_size))
     return world_size, rank, pp_size
 
