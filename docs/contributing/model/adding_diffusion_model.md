@@ -765,7 +765,7 @@ omni = Omni(model="your-model",
 
 ### CPU Offload
 
-See detailed guide: [CPU Offloading for Diffusion Models](../../user_guide/diffusion/cpu_offload_diffusion.md)
+See detailed guide: [CPU Offloading for Diffusion Models](../../design/feature/cpu_offload.md#model-support)
 
 vLLM-Omni provides two offloading strategies to reduce GPU memory usage:
 
