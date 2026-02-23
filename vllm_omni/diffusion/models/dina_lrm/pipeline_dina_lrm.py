@@ -338,7 +338,7 @@ class DiNaLRMPipeline(nn.Module):
         u: float = float(extra_args.get("noise_level", 0.1))
 
         # ── image / latent ────────────────────────────────────────────────────
-        multi_modal = getattr(first_prompt, "multi_modal_data", None) or {}
+        multi_modal = first_prompt.get("multi_modal_data", {})
         print(f"multi_modal: {multi_modal}")
         image_input = multi_modal.get("image", None)
         if image_input is None:
