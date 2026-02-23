@@ -139,7 +139,7 @@ def main() -> None:
     print(f"{'Prompt':<45}  {'Raw score':>10}  {'Norm score':>10}")
     print("-" * 60)
     for prompt, out in zip(prompts, outputs):
-        raw: torch.Tensor = out.output
+        raw: torch.Tensor = out.latents[0][0]
         norm = (raw + 10.0) / 10.0
         raw_val = raw.item() if raw.numel() == 1 else raw.tolist()
         norm_val = norm.item() if norm.numel() == 1 else norm.tolist()

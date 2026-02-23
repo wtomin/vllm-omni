@@ -98,24 +98,3 @@ Normalised score = (raw + 10) / 10  — typically in [0, 2], centred ~1.
 | `--image-path` | — | Local image file; falls back to synthetic if omitted |
 | `--noise-level` | `0.1` | Noise sigma σ. Use `0.1` for clean images, `0.4` for generated latents |
 | `--dtype` | `bfloat16` | Compute dtype: `bfloat16` / `float16` / `float32` |
-
-## Programmatic Usage
-
-```python
-from PIL import Image
-from vllm_omni.entrypoints.omni_diffusion import OmniDiffusion
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-image = Image.open("image.png").convert("RGB")
-
-client = OmniDiffusion(model="liuhuohuo/DiNa-LRM-SD35M-12layers")
-outputs = client.generate(
-    [{"prompt": "A cat sitting on a wooden floor",
-      "multi_modal_data": {"image": image}}],
-    OmniDiffusionSamplingParams(extra_args={"noise_level": 0.1}),
-)
-
-raw_score = outputs[0].output.item()
-norm_score = (raw_score + 10.0) / 10.0
-print(f"Raw: {raw_score:.4f}  Normalised: {norm_score:.4f}")
-```
