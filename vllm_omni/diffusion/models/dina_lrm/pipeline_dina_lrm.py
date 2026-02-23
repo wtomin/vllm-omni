@@ -331,7 +331,7 @@ class DiNaLRMPipeline(nn.Module):
         # ── text prompts ──────────────────────────────────────────────────────
         first_prompt = req.prompts[0]
         print(f"first_prompt: {first_prompt}")
-        prompt_texts: list[str] = [(p if isinstance(p, str) else p.get("prompt", "")) for p in first_prompt]
+        prompt_texts: list[str] = first_prompt.get("prompt", "")
         print(f"prompt_texts: {prompt_texts}")
 
         # ── noise level u (passed as extra_args["noise_level"]) ──────────────
