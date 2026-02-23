@@ -219,7 +219,7 @@ def run_vllm_omni(args, prompts, image, device, dtype) -> torch.Tensor:
     torch.manual_seed(42)
     outputs = client.generate(request_prompts, sampling_params)
 
-    scores = torch.stack([out.output.float().cpu() for out in outputs])
+    scores = outputs[0].latents[0].float().cpu()
     _print_score("OmniDiffusion (vllm-omni)", scores)
 
     del client
