@@ -203,6 +203,8 @@ class DiNaLRMPipeline(nn.Module):
             if (hasattr(self.rm_config, "training") and hasattr(self.rm_config.training, "add_noise"))
             else True
         )
+
+        self.reward_model.eval()
         logger.info("DiNaLRMPipeline ready on %s (dtype=%s).", self.device, self.model_dtype)
 
     # ── checkpoint loading ────────────────────────────────────────────────────
@@ -321,7 +323,7 @@ class DiNaLRMPipeline(nn.Module):
             ``output``: torch.Tensor (B,) of raw reward scores.
             Apply ``(score + 10.0) / 10.0`` for human-readable values.
         """
-        self.reward_model.eval()
+        print(f"req.prompts: {req.prompts}")
 
         # ── text prompts ──────────────────────────────────────────────────────
         prompts = req.prompts or []
