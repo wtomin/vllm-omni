@@ -332,6 +332,7 @@ class DiNaLRMPipeline(nn.Module):
         first_prompt = req.prompts[0]
         print(f"first_prompt: {first_prompt}")
         prompt_texts: list[str] = [(p if isinstance(p, str) else p.get("prompt", "")) for p in first_prompt]
+        print(f"prompt_texts: {prompt_texts}")
 
         # ── noise level u (passed as extra_args["noise_level"]) ──────────────
         extra_args: dict = getattr(req.sampling_params, "extra_args", {}) or {}
@@ -382,6 +383,10 @@ class DiNaLRMPipeline(nn.Module):
                 self.reward_model.backbone.set_adapter("rm_lora")
 
             # ── reward forward ────────────────────────────────────────────────
+            print(f"noisy_latents: {noisy_latents.shape}")
+            print(f"timesteps: {timesteps.shape}")
+            print(f"prompt_embeds: {prompt_embeds.shape}")
+            print(f"pooled_embeds: {pooled_embeds.shape}")
             scores = self.reward_model(
                 latents=noisy_latents,
                 timesteps=timesteps,
