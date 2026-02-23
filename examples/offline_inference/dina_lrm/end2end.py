@@ -11,24 +11,24 @@ Usage
 -----
 Score a prompt against a local image:
 
-    python end2end.py \\
-        --model liuhuohuo/DiNa-LRM-SD35M-12layers \\
-        --prompt "A cat sitting on a wooden floor" \\
+    python end2end.py \
+        --model liuhuohuo/DiNa-LRM-SD35M-12layers \
+        --prompt "A cat sitting on a wooden floor" \
         --image-path /path/to/image.png
 
 Score multiple prompts against the same image (outputs one score per prompt):
 
-    python end2end.py \\
-        --model liuhuohuo/DiNa-LRM-SD35M-12layers \\
-        --prompts "A cat" "A dog" "A car" \\
+    python end2end.py \
+        --model liuhuohuo/DiNa-LRM-SD35M-12layers \
+        --prompts "A cat" "A dog" "A car" \
         --image-path /path/to/image.png
 
 Use a higher noise level (recommended for pipeline-generated latents):
 
-    python end2end.py \\
-        --model liuhuohuo/DiNa-LRM-SD35M-12layers \\
-        --prompt "A red sports car" \\
-        --image-path /path/to/image.png \\
+    python end2end.py \
+        --model liuhuohuo/DiNa-LRM-SD35M-12layers \
+        --prompt "A red sports car" \
+        --image-path /path/to/image.png \
         --noise-level 0.4
 """
 

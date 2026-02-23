@@ -221,7 +221,7 @@ def run_official(args, prompts, image, device, dtype) -> torch.Tensor:
             u=args.u,
         )
 
-    result = scores.float().cpu()
+    result = scores[0].float().cpu()
     _print_score("DRMInferencer (official)", result)
 
     del scorer, pipe
