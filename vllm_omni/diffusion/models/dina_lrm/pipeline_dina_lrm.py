@@ -120,6 +120,7 @@ class DiNaLRMPipeline(nn.Module):
     """
 
     _repeated_blocks: list[str] = []
+    support_image_input = True
 
     def __init__(self, *, od_config, prefix: str = ""):
         super().__init__()
