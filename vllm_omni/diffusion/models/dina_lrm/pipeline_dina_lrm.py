@@ -323,10 +323,13 @@ class DiNaLRMPipeline(nn.Module):
             ``output``: torch.Tensor (B,) of raw reward scores.
             Apply ``(score + 10.0) / 10.0`` for human-readable values.
         """
-        print(f"req.prompts: {req.prompts}")
-
+        if len(req.prompts) > 1:
+            logger.warning(
+                """This model only supports a single prompt, not a batched request.""",
+                """Taking only the first image for now.""",
+            )
         # ── text prompts ──────────────────────────────────────────────────────
-        prompts = req.prompts or []
+        prompts = req.prompts[0]
         prompt_texts: list[str] = [(p if isinstance(p, str) else p.get("prompt", "")) for p in prompts]
 
         # ── noise level u (passed as extra_args["noise_level"]) ──────────────
