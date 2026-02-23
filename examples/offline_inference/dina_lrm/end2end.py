@@ -16,13 +16,6 @@ Score a prompt against a local image:
         --prompt "A cat sitting on a wooden floor" \
         --image-path /path/to/image.png
 
-Score multiple prompts against the same image (outputs one score per prompt):
-
-    python end2end.py \
-        --model liuhuohuo/DiNa-LRM-SD35M-12layers \
-        --prompts "A cat" "A dog" "A car" \
-        --image-path /path/to/image.png
-
 Use a higher noise level (recommended for pipeline-generated latents):
 
     python end2end.py \
@@ -63,18 +56,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--prompt",
         default=None,
-        help="Single text prompt to score against the image.",
-    )
-    parser.add_argument(
-        "--prompts",
-        nargs="+",
-        default=None,
-        help="Multiple text prompts (one score per prompt).",
+        help="Text prompt to score against the image.",
     )
     parser.add_argument(
         "--image-path",
         default=None,
-        help="Path to a local image file (JPEG / PNG).  If omitted, a synthetic 512×512 image is used.",
+        help="Path to a local image file (JPEG / PNG).",
     )
     parser.add_argument(
         "--noise-level",
@@ -107,13 +94,10 @@ def main() -> None:
     torch.manual_seed(args.seed)
     print(f"[Info] Torch random seed set to {args.seed}.")
 
-    # ── Collect prompts ──────────────────────────────────────────────────────
-    if args.prompts:
-        prompts = args.prompts
-    elif args.prompt:
-        prompts = [args.prompt]
-    else:
-        raise ValueError("No prompt provided. Use --prompt or --prompts.")
+    # ── Collect prompt ───────────────────────────────────────────────────────
+    if not args.prompt:
+        raise ValueError("No prompt provided. Use --prompt.")
+    prompts = [args.prompt]
 
     # ── Load image ───────────────────────────────────────────────────────────
     if not args.image_path:

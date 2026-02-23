@@ -34,15 +34,6 @@ python end2end.py \
     --image-path /path/to/image.png
 ```
 
-**Score multiple prompts (one score per prompt, same image):**
-
-```bash
-python end2end.py \
-    --model liuhuohuo/DiNa-LRM-SD35M-12layers \
-    --prompts "A cat" "A dog" "A car" \
-    --image-path /path/to/image.png
-```
-
 **Use a higher noise level for pipeline-generated latents:**
 
 ```bash
@@ -60,13 +51,6 @@ python end2end.py \
     --model /path/to/DiNa-LRM-SD35M-12layers \
     --prompt "A beautiful sunset over the ocean" \
     --image-path /path/to/image.png
-```
-
-**Run with synthetic test image (no `--image-path` required):**
-
-```bash
-python end2end.py --model liuhuohuo/DiNa-LRM-SD35M-12layers \
-    --prompt "A beautiful landscape"
 ```
 
 ## Output
@@ -93,8 +77,7 @@ Normalised score = (raw + 10) / 10  — typically in [0, 2], centred ~1.
 | Argument | Default | Description |
 |---|---|---|
 | `--model` | `liuhuohuo/DiNa-LRM-SD35M-12layers` | HF repo ID or local path |
-| `--prompt` | — | Single text prompt |
-| `--prompts` | — | Multiple text prompts (space-separated) |
-| `--image-path` | — | Local image file; falls back to synthetic if omitted |
+| `--prompt` | — | Text prompt to score against the image |
+| `--image-path` | — | Local image file (JPEG / PNG) |
 | `--noise-level` | `0.1` | Noise sigma σ. Use `0.1` for clean images, `0.4` for generated latents |
 | `--dtype` | `bfloat16` | Compute dtype: `bfloat16` / `float16` / `float32` |
