@@ -368,6 +368,7 @@ class DiNaLRMPipeline(nn.Module):
 
             # ── add noise at sigma = u ────────────────────────────────────────
             bsz = latents.shape[0]
+            print(f"bsz: {bsz}")
             u_tensor = torch.full((bsz,), u, device=self.device, dtype=torch.float32)
             sigmas, timesteps = self._get_timesteps_from_sigma(self.noise_scheduler, u_tensor, n_dim=latents.dim())
             if self.add_noise:
@@ -387,7 +388,7 @@ class DiNaLRMPipeline(nn.Module):
                 encoder_hidden_states=prompt_embeds,
                 pooled_projections=pooled_embeds,
             )
-            scores = scores.squeeze(-1)  # (B,)
+
             print(f"scores: {scores}")
 
         return DiffusionOutput(output=scores)
