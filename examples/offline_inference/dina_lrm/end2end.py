@@ -30,6 +30,14 @@ Use a higher noise level (recommended for pipeline-generated latents):
         --prompt "A red sports car" \
         --image-path /path/to/image.png \
         --noise-level 0.4
+
+Fix the random seed for reproducible results:
+
+    python end2end.py \
+        --model liuhuohuo/DiNa-LRM-SD35M-12layers \
+        --prompt "A cat sitting on a wooden floor" \
+        --image-path /path/to/image.png \
+        --seed 42
 """
 
 import argparse
@@ -84,20 +92,20 @@ def parse_args() -> argparse.Namespace:
         default="bfloat16",
         help="Model compute dtype.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Torch random seed for reproducibility.",
+    )
     return parser.parse_args()
-
-
-def _make_synthetic_image() -> Image.Image:
-    """Return a deterministic 512×512 RGB test image."""
-    import numpy as np
-
-    rng = np.random.RandomState(seed=0)
-    arr = rng.randint(0, 256, (512, 512, 3), dtype=np.uint8)
-    return Image.fromarray(arr)
 
 
 def main() -> None:
     args = parse_args()
+
+    torch.manual_seed(args.seed)
+    print(f"[Info] Torch random seed set to {args.seed}.")
 
     # ── Collect prompts ──────────────────────────────────────────────────────
     if args.prompts:
@@ -105,19 +113,15 @@ def main() -> None:
     elif args.prompt:
         prompts = [args.prompt]
     else:
-        prompts = ["A beautiful landscape with mountains and a lake"]
-        print(f"[Info] No prompt provided, using default: {prompts[0]!r}")
+        raise ValueError("No prompt provided. Use --prompt or --prompts.")
 
     # ── Load image ───────────────────────────────────────────────────────────
-    if args.image_path and os.path.exists(args.image_path):
-        image = Image.open(args.image_path).convert("RGB")
-        print(f"[Info] Loaded image from: {args.image_path}")
-    else:
-        if args.image_path:
-            print(f"[Warning] Image path not found: {args.image_path!r}. Using synthetic test image.")
-        else:
-            print("[Info] No image path provided. Using synthetic 512×512 test image.")
-        image = _make_synthetic_image()
+    if not args.image_path:
+        raise ValueError("No image path provided. Use --image-path.")
+    if not os.path.exists(args.image_path):
+        raise FileNotFoundError(f"Image path not found: {args.image_path!r}")
+    image = Image.open(args.image_path).convert("RGB")
+    print(f"[Info] Loaded image from: {args.image_path}")
 
     # ── Build request prompts (one dict per prompt, sharing the same image) ─
     request_prompts = [{"prompt": p, "multi_modal_data": {"image": image}} for p in prompts]
