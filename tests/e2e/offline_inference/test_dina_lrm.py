@@ -12,12 +12,12 @@ Prerequisites
 
 Usage
 ─────
-  python tests/test_vllm_omni_equivalence.py \\
-      --rm-model  liuhuohuo/DiNa-LRM-SD35M-12layers \\
-      --sd3-model stabilityai/stable-diffusion-3.5-medium \\
-      [--image-path path/to/image.png] \\
-      [--u 0.1] \\
-      [--device cuda:0] \\
+  python tests/test_vllm_omni_equivalence.py \
+      --rm-model  liuhuohuo/DiNa-LRM-SD35M-12layers \
+      --sd3-model stabilityai/stable-diffusion-3.5-medium \
+      [--image-path path/to/image.png] \
+      [--u 0.1] \
+      [--device cuda:0] \
       [--atol 5e-3]
 """
 
@@ -28,8 +28,6 @@ import gc
 import importlib
 import os
 import sys
-from dataclasses import dataclass, field
-from typing import Any
 
 import numpy as np
 import torch
@@ -90,46 +88,6 @@ def _check_dependencies() -> None:
         sys.exit(1)
 
     print("\nAll dependencies satisfied. Proceeding with test.\n")
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Lightweight stubs for vLLM-Omni types
-# These carry only the attributes that DiNaLRMPipeline actually reads, so the
-# test works without constructing the full vLLM-Omni config graph.
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-@dataclass
-class _SamplingParams:
-    """Minimal stand-in for OmniDiffusionSamplingParams.
-
-    OmniDiffusionSamplingParams does not have a native `u` field.
-    DiNa-LRM-specific parameters (e.g. noise level) are passed via extra_args:
-        _SamplingParams(extra_args={"noise_level": 0.4})
-    """
-
-    extra_args: dict[str, Any] = field(default_factory=dict)
-    num_inference_steps: int | None = None
-    guidance_scale: float | None = None
-    width: int | None = None
-    height: int | None = None
-
-
-@dataclass
-class _OdConfig:
-    """Minimal stand-in for OmniDiffusionConfig."""
-
-    model: str
-    dtype: str = "bfloat16"
-
-
-@dataclass
-class _Request:
-    """Minimal stand-in for OmniDiffusionRequest."""
-
-    prompts: list[Any]
-    multi_modal_data: dict[str, Any]
-    sampling_params: _SamplingParams = field(default_factory=_SamplingParams)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -232,43 +190,39 @@ def run_official(args, prompts, image, device, dtype) -> torch.Tensor:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Path B – DiNaLRMPipeline (vLLM-Omni integration)
+# Path B – OmniDiffusion.generate (vLLM-Omni integration)
 # ──────────────────────────────────────────────────────────────────────────────
 
 
 def run_vllm_omni(args, prompts, image, device, dtype) -> torch.Tensor:
-    """Run inference using DiNaLRMPipeline (the vLLM-Omni integration path).
+    """Run inference using OmniDiffusion.generate (the vLLM-Omni integration path).
 
     Returns raw reward scores as a float32 CPU tensor of shape (B,).
     """
-    from vllm_omni.diffusion.models.dina_lrm.pipeline_dina_lrm import DiNaLRMPipeline
+    from vllm_omni.entrypoints.omni_diffusion import OmniDiffusion
+    from vllm_omni.inputs.data import OmniDiffusionSamplingParams
 
-    od_config = _OdConfig(
-        model=args.rm_model,
-        dtype={
-            torch.bfloat16: "bfloat16",
-            torch.float16: "float16",
-            torch.float32: "float32",
-        }.get(dtype, "bfloat16"),
-    )
+    dtype_str = {
+        torch.bfloat16: "bfloat16",
+        torch.float16: "float16",
+        torch.float32: "float32",
+    }.get(dtype, "bfloat16")
 
-    print("[B] Loading DiNaLRMPipeline (vLLM-Omni path) …")
-    pipeline = DiNaLRMPipeline(od_config=od_config)
+    print("[B] Loading DiNaLRMPipeline via OmniDiffusion …")
+    client = OmniDiffusion(model=args.rm_model, dtype=dtype_str)
 
-    request = _Request(
-        prompts=prompts,
-        multi_modal_data={"image": image},
-        sampling_params=_SamplingParams(extra_args={"noise_level": args.u}),
+    request_prompts = [{"prompt": p, "multi_modal_data": {"image": image}} for p in prompts]
+    sampling_params = OmniDiffusionSamplingParams(
+        extra_args={"noise_level": args.u},
     )
 
     torch.manual_seed(42)
-    with torch.no_grad():
-        result = pipeline.forward(request)
+    outputs = client.generate(request_prompts, sampling_params)
 
-    scores = result.output.float().cpu()
-    _print_score("DiNaLRMPipeline (vllm-omni)", scores)
+    scores = torch.stack([out.output.float().cpu() for out in outputs])
+    _print_score("OmniDiffusion (vllm-omni)", scores)
 
-    del pipeline
+    del client
     gc.collect()
     torch.cuda.empty_cache()
 
