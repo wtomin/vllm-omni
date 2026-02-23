@@ -330,9 +330,7 @@ class DiNaLRMPipeline(nn.Module):
             )
         # ── text prompts ──────────────────────────────────────────────────────
         first_prompt = req.prompts[0]
-        print(f"first_prompt: {first_prompt}")
         prompt_texts: list[str] = first_prompt.get("prompt", "")
-        print(f"prompt_texts: {prompt_texts}")
 
         # ── noise level u (passed as extra_args["noise_level"]) ──────────────
         extra_args: dict = getattr(req.sampling_params, "extra_args", {}) or {}
@@ -340,7 +338,6 @@ class DiNaLRMPipeline(nn.Module):
 
         # ── image / latent ────────────────────────────────────────────────────
         multi_modal = first_prompt.get("multi_modal_data", {})
-        print(f"multi_modal: {multi_modal}")
         image_input = multi_modal.get("image", None)
         if image_input is None:
             raise ValueError(
@@ -369,7 +366,6 @@ class DiNaLRMPipeline(nn.Module):
 
             # ── add noise at sigma = u ────────────────────────────────────────
             bsz = latents.shape[0]
-            print(f"bsz: {bsz}")
             u_tensor = torch.full((bsz,), u, device=self.device, dtype=torch.float32)
             sigmas, timesteps = self._get_timesteps_from_sigma(self.noise_scheduler, u_tensor, n_dim=latents.dim())
             if self.add_noise:
@@ -383,17 +379,11 @@ class DiNaLRMPipeline(nn.Module):
                 self.reward_model.backbone.set_adapter("rm_lora")
 
             # ── reward forward ────────────────────────────────────────────────
-            print(f"noisy_latents: {noisy_latents.shape}")
-            print(f"timesteps: {timesteps.shape}")
-            print(f"prompt_embeds: {prompt_embeds.shape}")
-            print(f"pooled_embeds: {pooled_embeds.shape}")
             scores = self.reward_model(
                 latents=noisy_latents,
                 timesteps=timesteps,
                 encoder_hidden_states=prompt_embeds,
                 pooled_projections=pooled_embeds,
             )
-
-            print(f"scores: {scores}")
 
         return DiffusionOutput(output=scores, trajectory_latents=scores)
