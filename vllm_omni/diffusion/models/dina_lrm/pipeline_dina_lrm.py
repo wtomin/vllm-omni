@@ -311,7 +311,7 @@ class DiNaLRMPipeline(nn.Module):
         ----------
         req : OmniDiffusionRequest
             * ``req.prompts``                    – list[str | dict]
-            * ``req.multi_modal_data["image"]``  – PIL.Image **or**
+            * ``req.prompts[0].multi_modal_data["image"]``  – PIL.Image **or**
                                                    torch.Tensor (B,C,H,W)
                                                    (already in SD3 latent space)
             * ``req.sampling_params.extra_args["noise_level"]``
@@ -330,6 +330,7 @@ class DiNaLRMPipeline(nn.Module):
             )
         # ── text prompts ──────────────────────────────────────────────────────
         first_prompt = req.prompts[0]
+        print(f"first_prompt: {first_prompt}")
         prompt_texts: list[str] = [(p if isinstance(p, str) else p.get("prompt", "")) for p in first_prompt]
 
         # ── noise level u (passed as extra_args["noise_level"]) ──────────────
@@ -338,6 +339,7 @@ class DiNaLRMPipeline(nn.Module):
 
         # ── image / latent ────────────────────────────────────────────────────
         multi_modal = getattr(first_prompt, "multi_modal_data", None) or {}
+        print(f"multi_modal: {multi_modal}")
         image_input = multi_modal.get("image", None)
         if image_input is None:
             raise ValueError(
