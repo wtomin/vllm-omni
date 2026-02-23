@@ -211,7 +211,7 @@ def run_vllm_omni(args, prompts, image, device, dtype) -> torch.Tensor:
     print("[B] Loading DiNaLRMPipeline via OmniDiffusion …")
     client = OmniDiffusion(model=args.rm_model, dtype=dtype_str)
 
-    request_prompts = [{"prompt": p, "multi_modal_data": {"image": image}} for p in prompts]
+    request_prompts = {"prompt": prompts[0], "multi_modal_data": {"image": image}}
     sampling_params = OmniDiffusionSamplingParams(
         extra_args={"noise_level": args.u},
     )
@@ -262,7 +262,7 @@ def test_same_noise_seed(args, device, dtype, image) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Equivalence test: DRMInferencer vs DiNaLRMPipeline",
+        description="Equivalence test: DRMInferencer vs vLLM-Omni",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     p.add_argument(
