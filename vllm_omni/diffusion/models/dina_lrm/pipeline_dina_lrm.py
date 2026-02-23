@@ -388,5 +388,6 @@ class DiNaLRMPipeline(nn.Module):
                 pooled_projections=pooled_embeds,
             )
             scores = scores.squeeze(-1)  # (B,)
+            print(f"scores: {scores}")
 
         return DiffusionOutput(output=scores)
