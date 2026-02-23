@@ -391,4 +391,4 @@ class DiNaLRMPipeline(nn.Module):
 
             print(f"scores: {scores}")
 
-        return DiffusionOutput(output=scores)
+        return DiffusionOutput(output=scores, trajectory_latents=scores)
