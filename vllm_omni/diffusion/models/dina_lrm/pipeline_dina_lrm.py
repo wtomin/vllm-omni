@@ -329,15 +329,15 @@ class DiNaLRMPipeline(nn.Module):
                 """Taking only the first image for now.""",
             )
         # ── text prompts ──────────────────────────────────────────────────────
-        prompts = req.prompts[0]
-        prompt_texts: list[str] = [(p if isinstance(p, str) else p.get("prompt", "")) for p in prompts]
+        first_prompt = req.prompts[0]
+        prompt_texts: list[str] = [(p if isinstance(p, str) else p.get("prompt", "")) for p in first_prompt]
 
         # ── noise level u (passed as extra_args["noise_level"]) ──────────────
         extra_args: dict = getattr(req.sampling_params, "extra_args", {}) or {}
         u: float = float(extra_args.get("noise_level", 0.1))
 
         # ── image / latent ────────────────────────────────────────────────────
-        multi_modal = getattr(req, "multi_modal_data", None) or {}
+        multi_modal = getattr(first_prompt, "multi_modal_data", None) or {}
         image_input = multi_modal.get("image", None)
         if image_input is None:
             raise ValueError(
