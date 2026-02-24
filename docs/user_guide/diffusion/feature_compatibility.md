@@ -79,7 +79,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
 
 ### 4. Hybrid Ulysses + Ring + Vae tiling
 
-Best for: **Very large images or videos on 4 GPUs**
+Best for: **Very large images or videos on multiple devices**
 
 Combines Ulysses-SP (all-to-all) with Ring-Attention (ring P2P) for scalable parallelism.
 
@@ -126,7 +126,7 @@ vllm serve Qwen/Qwen-Image --omni --port 8091 \
 vllm serve Qwen/Qwen-Image --omni --port 8091 \
   --cache-backend cache_dit \
   --cache-config '{"Fn_compute_blocks": 1, "max_warmup_steps": 8}' \
-  --ring 4
+  --ring 2
 ```
 
 ### Cache + CFG-Parallel
@@ -153,36 +153,35 @@ vllm serve Qwen/Qwen-Image --omni --port 8091 \
   --ring 2
 ```
 
-## Performance Expectations
-
-### Expected Speedups (Approximate)
-
-These are rough estimates. Actual performance varies by model, hardware, and configuration.
-
-| Configuration | GPUs | Expected Speedup vs Baseline |
-|--------------|------|------------------------------|
-| Cache-DiT alone | 1 | 1.5x-2.4x |
-| Cache-DiT + Ulysses-SP (2) | 2 | 2.5x-4.0x |
-| Cache-DiT + Ulysses-SP (4) | 4 | 3.5x-7.0x |
-| Cache-DiT + CFG-Parallel | 2 | 2.0x-3.0x |
-| Cache-DiT + Ulysses-SP + CFG-Parallel | 4 | 3.0x-6.0x |
-| Cache-DiT + Hybrid Ulysses+Ring (4) | 4 | 3.5x-6.5x |
-
-**Notes:**
-- Speedups are cumulative but not perfectly multiplicative
-- Communication overhead increases with more GPUs
-- Cache methods provide consistent speedup across all GPU counts
-- Sequence parallelism benefits increase with resolution
-
-## Best Practices
-
-### When to Combine Methods
-
-
-### Configuration Tips
 
 ## Limitations
 
+### Incompatibilities
+
+- **TeaCache + Cache-DiT**: These two cache methods cannot be used together. Only one cache backend can be active at a time. Attempting to enable both will result in an error.
+
+### Partial Support
+
+- **Tensor Parallelism — Text Encoder Not Sharded**: TP currently only shards the DiT blocks. Each TP rank retains a **full copy of the text encoder weights**, leading to significant GPU memory overhead proportional to TP degree. Tracked in [Issue #771](https://github.com/vllm-project/vllm-omni/issues/771).
+
+- **CPU Offloading — Two Modes Are Mutually Exclusive**: Model-level offload (`enable_cpu_offload`) and layerwise offload (`enable_layerwise_offload`) cannot be used simultaneously. If both are set, layerwise takes priority and model-level is silently ignored.
+
+- **CPU Offloading — VAE stays on GPU**: Both offloading strategies keep the VAE on GPU at all times. For high-resolution generation, VAE decode can still cause OOM. Mitigate by combining with `vae_use_tiling=True` or VAE Patch Parallelism.
+
+- **VAE Patch Parallelism — Allowlist Required**: VAE Patch Parallelism is only enabled for models that have been explicitly validated and added to the registry allowlist (`_VAE_PATCH_PARALLEL_ALLOWLIST`). Unsupported models will silently ignore `vae_patch_parallel_size`, and use sequential vae tiling instead.
+
+
+### Configuration Constraints
+
+- **GPU Count Must Match Parallel Degrees**: Total GPU count must satisfy:
+  ```
+  total_gpus = ulysses_degree × ring_degree × cfg_parallel_size × tensor_parallel_size
+  ```
+  Any mismatch will cause a configuration error at startup.
+
+- **VAE Patch Parallel Size ≤ DiT Process Group Size**: `vae_patch_parallel_size` reuses the DiT process group and cannot exceed it. Larger values are automatically clamped with a warning.
+
+- **Model-Specific TP Constraints**: Some models impose divisibility constraints on TP size. For example, Z-Image Turbo (`num_heads=30`) only supports `tensor_parallel_size=2`. Check [Supported Models](../diffusion_features.md#supported-models) for per-model constraints.
 
 ## Troubleshooting
 
@@ -203,15 +202,14 @@ These are rough estimates. Actual performance varies by model, hardware, and con
 **Solutions:**
 1. Enable Tensor Parallelism to shard weights
 2. Reduce resolution or batch size
-3. Use Ring-Attention instead of Ulysses-SP (more memory-efficient)
-4. Disable some parallelism methods
+3. Combine with memory efficient methods, such as cpu offloading
 
 ### Configuration Errors
 
 **Symptoms:** Errors about invalid parallel configuration
 
 **Solutions:**
-1. Verify total GPU count matches: `ulysses × ring × cfg × tensor`
+1. Verify total GPU count matches: `ulysses × ring × cfg × tp`
 2. Check model supports all enabled methods
 3. Ensure divisibility constraints (e.g., Z-Image TP=1 or 2 only)
 
