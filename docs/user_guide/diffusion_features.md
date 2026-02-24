@@ -118,14 +118,17 @@ The following tables show which models support each acceleration method:
 - ❌: No support plan
 - ❓: Not verified yet, help wanted!
 
-|                      | TeaCache | Cache-DiT | Sequence Parallel | Tensor Parallel | CFG-Parallel | LoRA Inference |
-|----------------------|:--------:|:---------:|:-----------------:|:---------------:|:------------:|:--------------:|
-| **Cache-DiT**        |    ❌    |           |                   |                 |              |                |
-| **Sequence Parallel**|    ❓    |    ❓     |                   |                 |              |                |
-| **Tensor Parallel**  |    ❓    |    ❓     |        ❓         |                 |              |                |
-| **CFG-Parallel**     |    ❓    |    ❓     |        ❓         |       ❓        |              |                |
-| **LoRA Inference**   |    ❓    |    ❓     |        ❓         |       ❓        |      ❓      |                |
-| **CPU Offloading**   |    ❓    |    ❓     |        ❓         |       ❓        |      ❓      |       ❓       |
+|                            | TeaCache | Cache-DiT | Seq Parallel | Tensor Parallel | CFG-Parallel | LoRA Inference | CPU Offloading | FP8 Quantization | VAE Patch Parallel |
+|----------------------------|:--------:|:---------:|:------------:|:---------------:|:------------:|:--------------:|:--------------:|:---------:|:------------------:|
+| **TeaCache**               |          |           |              |                 |              |                |                |           |                    |
+| **Cache-DiT**              |    ❌    |           |              |                 |              |                |                |           |                    |
+| **Seq Parallel**           |    ❓    |    ❓     |              |                 |              |                |                |           |                    |
+| **Tensor Parallel**        |    ❓    |    ❓     |      ❓      |                 |              |                |                |           |                    |
+| **CFG-Parallel**           |    ❓    |    ❓     |      ❓      |       ❓        |              |                |                |           |                    |
+| **LoRA Inference**         |    ❓    |    ❓     |      ❓      |       ❓        |      ❓      |                |                |           |                    |
+| **CPU Offloading**         |    ❓    |    ❓     |      ❓      |       ❓        |      ❓      |       ❓       |                |           |                    |
+| **FP8 Quantization**              |    ❓    |    ❓     |      ❓      |       ❓        |      ❓      |       ❓       |       ❓       |           |                    |
+| **VAE Patch Parallel**     |    ❓    |    ❓     |      ❓      |       ❓        |      ❓      |       ❓       |       ❓       |     ❓    |                    |
 
 **Note:** The table shows cross-compatibility between features. If you'd like to help verify untested combinations, please contribute test results to the project!
 
