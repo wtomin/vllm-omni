@@ -185,5 +185,5 @@ _sequence_parallel_size = ulysses_degree × ring_degree_
 
 1. ✅ **Enable VAE Patch Parallelism** - Set `vae_patch_parallel_size`， `vae_use_tiling=True` in `DiffusionParallelConfig` to reduce VAE decode peak memory
 2. ✅ **Use Long Sequence** - VAE patch parallelism benefits are most apparent at long sequence decoding
-4. ✅ **Combine with other parallelism methods** - Suggest to use together with Tensor Parallel or CFG-Parallel for maximum memory savings
-5. ⚠️ **Check Model Support** - Verify in [supported models](../diffusion_features.md#supported-models) or `vllm_omni/diffusion/registry.py`
+3. ✅ **Combine with other parallelism methods** - Suggest to use together with Tensor Parallel or CFG-Parallel for maximum memory savings
+4. ⚠️ **Check Model Support** - Verify in [supported models](../diffusion_features.md#supported-models) or `vllm_omni/diffusion/registry.py`

@@ -136,6 +136,6 @@ parallel_config=DiffusionParallelConfig(tensor_parallel_size=4)
 
 ## Summary
 
-1. ✅ **Enable TP** - Set `tensor_parallel_size` to reduce per-GPU memory
+1. ✅ **Enable TP** - Set `--tensor-parallel-size` to reduce per-GPU memory
 2. ✅ **Increase TP size** - Only increase if OOM persists
-4. ⚠️ **Text encoder not sharded** - Known limitation
+3. ⚠️ **Text encoder not sharded** - Known limitation
