@@ -157,7 +157,7 @@ _VAE_PATCH_PARALLEL_ALLOWLIST = {
 
 1. **Use a supported model** (recommended):
 
-2. Waiting for updates (contributings are welcomed).
+2. Waiting for updates (contributions are welcome).
 
 
 ### Common Issue 2: `vae_patch_parallel_size` Exceeds DiT Process Group Size
