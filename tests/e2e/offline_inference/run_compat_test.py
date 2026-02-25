@@ -3,7 +3,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """run_compat_test.py — Feature compatibility test runner (Python)
 
-Replaces run_compat_test.sh with a structured two-level test matrix:
+Uses batch_text_to_image.py for efficient batch processing with a structured 
+two-level test matrix:
 
   Baseline 1  : pure baseline — no acceleration features
   Baseline 2  : --baseline-feature enabled alone
@@ -13,7 +14,9 @@ Each run saves:
   <output_dir>/<baseline_feature>/baseline/prompt_NN.png
   <output_dir>/<baseline_feature>/baseline/prompt_NN.log
   <output_dir>/<baseline_feature>/baseline/prompt_NN.exitcode
+  <output_dir>/<baseline_feature>/baseline/batch_generation.log
   <output_dir>/<baseline_feature>/<config_name>/prompt_NN.{png,log,exitcode}
+  <output_dir>/<baseline_feature>/<config_name>/batch_generation.log
 
 Usage:
   python run_compat_test.py \\
@@ -31,7 +34,7 @@ Usage:
 
 Extending the feature registry:
   Add a new entry to FEATURE_REGISTRY with:
-    args            : list of CLI tokens passed to text_to_image.py
+    args            : list of CLI tokens passed to batch_text_to_image.py
     gpu_multiplier  : parallel dimension (1 = no extra GPUs, 2 = doubles GPU count, …)
     lossy           : True if the feature may degrade image quality (cache-based methods)
     label           : human-readable display name for reports/charts
@@ -265,38 +268,28 @@ def write_config_meta(
 # ── Per-prompt runner ─────────────────────────────────────────────────────────
 
 
-def run_single_prompt(
-    t2i_script: Path,
+def run_batch_prompts(
+    batch_script: Path,
     cfg: dict,
-    prompt: str,
-    prompt_idx: int,
+    prompt_file: Path,
+    num_prompts: int,
     cfg_dir: Path,
     args: argparse.Namespace,
     dry_run: bool = False,
-) -> bool:
-    """Run text_to_image.py for a single prompt; return True on success."""
-    img_path = cfg_dir / f"prompt_{prompt_idx:02d}.png"
-    log_path = cfg_dir / f"prompt_{prompt_idx:02d}.log"
-    rc_path = cfg_dir / f"prompt_{prompt_idx:02d}.exitcode"
-
-    seed = args.seed + prompt_idx
-
-    # Write the single prompt to a temporary file and pass it via --prompt-file
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tf:
-        tf.write(prompt + "\n")
-        prompt_file_path = tf.name
-
+) -> tuple[int, int]:
+    """Run batch_text_to_image.py for all prompts; return (n_ok, n_fail)."""
+    # Use cfg_dir as output directory for batch generation
     cmd = [
         sys.executable,
-        str(t2i_script),
+        str(batch_script),
         "--model",
         args.model,
         "--prompt-file",
-        prompt_file_path,
+        str(prompt_file),
         "--negative-prompt",
         NEGATIVE_PROMPT,
         "--output",
-        str(img_path),
+        str(cfg_dir),
         "--num-inference-steps",
         str(args.steps),
         "--height",
@@ -306,53 +299,82 @@ def run_single_prompt(
         "--cfg-scale",
         str(args.cfg_scale),
         "--seed",
-        str(seed),
+        str(args.seed),
         *cfg["args"],
     ]
 
-    label = f"[{prompt_idx + 1:02d}/{args.num_prompts:02d}] {prompt[:61]}…"
-    print(f"  {label}", end="", flush=True)
+    print(f"  Running batch generation for {num_prompts} prompts...", flush=True)
 
     if dry_run:
-        print()
         print(f"    DRY-RUN: {' '.join(cmd)}")
-        rc_path.write_text("0")
-        Path(prompt_file_path).unlink(missing_ok=True)
-        return True
+        return num_prompts, 0
 
+    # Run batch generation
     t0 = time.monotonic()
     result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     elapsed_ms = (time.monotonic() - t0) * 1_000
     rc = result.returncode
 
-    Path(prompt_file_path).unlink(missing_ok=True)
-    log_path.write_bytes(result.stdout)
-    rc_path.write_text(str(rc))
+    # Save batch log
+    batch_log_path = cfg_dir / "batch_generation.log"
+    batch_log_path.write_bytes(result.stdout)
+    
+    # Save batch exit code
+    batch_rc_path = cfg_dir / "batch_generation.exitcode"
+    batch_rc_path.write_text(str(rc))
 
-    success = rc == 0 and img_path.exists()
-    if success:
-        _log(f"gen={elapsed_ms:.0f}ms", "OK")
-    else:
-        _log(f"FAIL (rc={rc})", "FAIL")
+    if rc != 0:
+        _log(f"BATCH FAIL (rc={rc})", "FAIL")
         tail = result.stdout.decode(errors="replace").splitlines()[-10:]
         for ln in tail:
             print(f"      │ {ln}")
+        return 0, num_prompts
 
-    return success
+    # Parse output to create per-prompt logs and check success
+    output_text = result.stdout.decode(errors="replace")
+    
+    # Rename generated images from image_NNNN.png to prompt_NN.png
+    n_ok = 0
+    n_fail = 0
+    for idx in range(num_prompts):
+        src_img = cfg_dir / f"image_{idx:04d}.png"
+        dst_img = cfg_dir / f"prompt_{idx:02d}.png"
+        
+        if src_img.exists():
+            src_img.rename(dst_img)
+            n_ok += 1
+            # Create individual log files (placeholder)
+            log_path = cfg_dir / f"prompt_{idx:02d}.log"
+            log_path.write_text(f"Generated as part of batch run. See batch_generation.log for details.\n")
+            # Create individual exitcode files
+            rc_path = cfg_dir / f"prompt_{idx:02d}.exitcode"
+            rc_path.write_text("0")
+        else:
+            n_fail += 1
+            # Create failed log
+            log_path = cfg_dir / f"prompt_{idx:02d}.log"
+            log_path.write_text(f"Image not found in batch generation. See batch_generation.log for details.\n")
+            rc_path = cfg_dir / f"prompt_{idx:02d}.exitcode"
+            rc_path.write_text("1")
+
+    _log(f"Batch completed: {n_ok} OK / {n_fail} FAIL in {elapsed_ms:.0f}ms", "OK" if n_fail == 0 else "WARN")
+    
+    return n_ok, n_fail
 
 
 # ── Per-config runner ─────────────────────────────────────────────────────────
 
 
 def run_config(
-    t2i_script: Path,
+    batch_script: Path,
     cfg: dict,
-    prompts: list[str],
+    prompt_file: Path,
+    num_prompts: int,
     cfg_dir: Path,
     args: argparse.Namespace,
     dry_run: bool,
 ) -> tuple[int, int]:
-    """Run all prompts for one config; return (n_ok, n_fail)."""
+    """Run all prompts for one config using batch generation; return (n_ok, n_fail)."""
     cfg_dir.mkdir(parents=True, exist_ok=True)
     write_config_meta(cfg_dir, cfg, args)
 
@@ -363,15 +385,10 @@ def run_config(
     _log(f"GPUs   : {cfg['gpu_req']}  |  Lossy: {cfg['lossy']}")
     print(sep)
 
-    n_ok = n_fail = 0
-    for i, prompt in enumerate(prompts):
-        ok = run_single_prompt(t2i_script, cfg, prompt, i, cfg_dir, args, dry_run)
-        if ok:
-            n_ok += 1
-        else:
-            n_fail += 1
+    # Use batch processing instead of per-prompt processing
+    n_ok, n_fail = run_batch_prompts(batch_script, cfg, prompt_file, num_prompts, cfg_dir, args, dry_run)
 
-    _log(f"Config '{cfg['name']}': {n_ok} OK / {n_fail} FAIL / {len(prompts)} total")
+    _log(f"Config '{cfg['name']}': {n_ok} OK / {n_fail} FAIL / {num_prompts} total")
     return n_ok, n_fail
 
 
@@ -479,12 +496,12 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
 
-    # Locate text_to_image.py relative to this script's repo root
+    # Locate batch_text_to_image.py relative to this script's repo root
     script_dir = Path(__file__).resolve().parent
     repo_root = script_dir.parents[2]  # tests/e2e/offline_inference → repo root
-    t2i_script = repo_root / "examples" / "offline_inference" / "text_to_image" / "text_to_image.py"
-    if not t2i_script.exists():
-        print(f"[ERROR] text_to_image.py not found at: {t2i_script}", file=sys.stderr)
+    batch_script = repo_root / "examples" / "offline_inference" / "text_to_image" / "batch_text_to_image.py"
+    if not batch_script.exists():
+        print(f"[ERROR] batch_text_to_image.py not found at: {batch_script}", file=sys.stderr)
         return 1
 
     # Validate and build config matrix
@@ -505,37 +522,48 @@ def main() -> int:
     row_dir = Path(args.output_dir) / args.baseline_feature
     row_dir.mkdir(parents=True, exist_ok=True)
 
-    # Header
-    print()
-    print("=" * 72)
-    print("  Feature Compatibility Test")
-    print(f"  Baseline feature : {args.baseline_feature}")
-    print(f"  Addons           : {args.addons or '(none)'}")
-    print(f"  Model            : {args.model}")
-    print(f"  GPUs available   : {gpu_count}")
-    print(f"  Configs          : {len(configs)}")
-    print(f"  Prompts          : {num_prompts}")
-    print(f"  Steps            : {args.steps}  |  {args.width}×{args.height}")
-    print(f"  Output dir       : {row_dir}")
-    print("=" * 72)
+    # Create a temporary prompt file with only the prompts we need
+    # This file will be shared across all configs to avoid redundant file creation
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tf:
+        for prompt in prompts:
+            tf.write(prompt + "\n")
+        temp_prompt_file = Path(tf.name)
 
-    write_manifest(row_dir, args.baseline_feature, args.addons or [], configs, args, gpu_count)
+    try:
+        # Header
+        print()
+        print("=" * 72)
+        print("  Feature Compatibility Test (Batch Mode)")
+        print(f"  Baseline feature : {args.baseline_feature}")
+        print(f"  Addons           : {args.addons or '(none)'}")
+        print(f"  Model            : {args.model}")
+        print(f"  GPUs available   : {gpu_count}")
+        print(f"  Configs          : {len(configs)}")
+        print(f"  Prompts          : {num_prompts}")
+        print(f"  Steps            : {args.steps}  |  {args.width}×{args.height}")
+        print(f"  Output dir       : {row_dir}")
+        print("=" * 72)
 
-    total_ok = total_fail = total_skip = 0
+        write_manifest(row_dir, args.baseline_feature, args.addons or [], configs, args, gpu_count)
 
-    for cfg in configs:
-        if cfg["gpu_req"] > gpu_count:
-            _log(
-                f"SKIP '{cfg['name']}' — requires {cfg['gpu_req']} GPUs, only {gpu_count} available",
-                "WARN",
-            )
-            total_skip += 1
-            continue
+        total_ok = total_fail = total_skip = 0
 
-        cfg_dir = row_dir / cfg["name"]
-        n_ok, n_fail = run_config(t2i_script, cfg, prompts, cfg_dir, args, args.dry_run)
-        total_ok += n_ok
-        total_fail += n_fail
+        for cfg in configs:
+            if cfg["gpu_req"] > gpu_count:
+                _log(
+                    f"SKIP '{cfg['name']}' — requires {cfg['gpu_req']} GPUs, only {gpu_count} available",
+                    "WARN",
+                )
+                total_skip += 1
+                continue
+
+            cfg_dir = row_dir / cfg["name"]
+            n_ok, n_fail = run_config(batch_script, cfg, temp_prompt_file, num_prompts, cfg_dir, args, args.dry_run)
+            total_ok += n_ok
+            total_fail += n_fail
+    finally:
+        # Clean up temporary prompt file
+        temp_prompt_file.unlink(missing_ok=True)
 
     # Final summary
     print()
