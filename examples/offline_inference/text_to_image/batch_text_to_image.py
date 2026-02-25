@@ -190,7 +190,10 @@ def main():
     # Create output directory
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+
     generator = torch.Generator(device=current_omni_platform.device_type).manual_seed(args.seed)
 
     # Configure cache based on backend type
