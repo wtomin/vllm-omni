@@ -11,12 +11,14 @@ two-level test matrix:
   Addon 1..N  : Baseline-2 arguments + one addon feature each
 
 Each run saves:
-  <output_dir>/<baseline_feature>/baseline/prompt_NN.png
-  <output_dir>/<baseline_feature>/baseline/prompt_NN.log
-  <output_dir>/<baseline_feature>/baseline/prompt_NN.exitcode
   <output_dir>/<baseline_feature>/baseline/batch_generation.log
-  <output_dir>/<baseline_feature>/<config_name>/prompt_NN.{png,log,exitcode}
+  <output_dir>/<baseline_feature>/baseline/batch_generation.exitcode
+  <output_dir>/<baseline_feature>/baseline/prompt_NN.png
+  <output_dir>/<baseline_feature>/baseline/prompt_NN.exitcode
   <output_dir>/<baseline_feature>/<config_name>/batch_generation.log
+  <output_dir>/<baseline_feature>/<config_name>/prompt_NN.{png,exitcode}
+
+Note: Individual prompt_NN.log files are not created; all logs are in batch_generation.log
 
 Usage:
   python run_compat_test.py \\
@@ -329,33 +331,23 @@ def run_batch_prompts(
         for ln in tail:
             print(f"      │ {ln}")
         return 0, num_prompts
-
-    # Parse output to create per-prompt logs and check success
-    output_text = result.stdout.decode(errors="replace")
     
     # Rename generated images from image_NNNN.png to prompt_NN.png
+    # and create minimal metadata files for compatibility with analyze script
     n_ok = 0
     n_fail = 0
     for idx in range(num_prompts):
         src_img = cfg_dir / f"image_{idx:04d}.png"
         dst_img = cfg_dir / f"prompt_{idx:02d}.png"
+        rc_path = cfg_dir / f"prompt_{idx:02d}.exitcode"
         
         if src_img.exists():
             src_img.rename(dst_img)
-            n_ok += 1
-            # Create individual log files (placeholder)
-            log_path = cfg_dir / f"prompt_{idx:02d}.log"
-            log_path.write_text(f"Generated as part of batch run. See batch_generation.log for details.\n")
-            # Create individual exitcode files
-            rc_path = cfg_dir / f"prompt_{idx:02d}.exitcode"
             rc_path.write_text("0")
+            n_ok += 1
         else:
-            n_fail += 1
-            # Create failed log
-            log_path = cfg_dir / f"prompt_{idx:02d}.log"
-            log_path.write_text(f"Image not found in batch generation. See batch_generation.log for details.\n")
-            rc_path = cfg_dir / f"prompt_{idx:02d}.exitcode"
             rc_path.write_text("1")
+            n_fail += 1
 
     _log(f"Batch completed: {n_ok} OK / {n_fail} FAIL in {elapsed_ms:.0f}ms", "OK" if n_fail == 0 else "WARN")
     
