@@ -15,7 +15,9 @@ import torch
 
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
 from vllm_omni.diffusion.distributed.parallel_state import get_classifier_free_guidance_world_size
-
+from vllm_omni.diffusion.distributed.parallel_state import (
+    get_cfg_group,
+)
 logger = logging.getLogger(__name__)
 
 
@@ -68,7 +70,12 @@ class QwenImageCFGParallelMixin(CFGParallelMixin):
         self.scheduler.set_begin_index(0)
         self.transformer.do_true_cfg = do_true_cfg
         additional_transformer_kwargs = additional_transformer_kwargs or {}
-
+        
+        if get_classifier_free_guidance_world_size() > 1:
+            cfg_group = get_cfg_group()
+            latents = latents.contiguous()
+            cfg_group.broadcast(latents, src=0)
+        
         for i, t in enumerate(timesteps):
             if self.interrupt:
                 continue
