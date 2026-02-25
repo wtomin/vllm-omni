@@ -43,6 +43,7 @@ class QwenImageCFGParallelMixin(CFGParallelMixin):
         image_latents: torch.Tensor | None = None,
         cfg_normalize: bool = True,
         additional_transformer_kwargs: dict[str, Any] | None = None,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """
         Diffusion loop with optional classifier-free guidance.
@@ -127,7 +128,7 @@ class QwenImageCFGParallelMixin(CFGParallelMixin):
             )
 
             # Compute the previous noisy sample x_t -> x_t-1 with automatic CFG sync
-            latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, do_true_cfg)
+            latents = self.scheduler_step_maybe_with_cfg(noise_pred, t, latents, do_true_cfg, generator=generator)
 
         return latents
 
