@@ -461,7 +461,7 @@ def _parse_args() -> argparse.Namespace:
         "--seed",
         type=int,
         default=42,
-        help="Base random seed; prompt i uses seed+i.",
+        help="Random seed.",
     )
     p.add_argument(
         "--prompt-file",
