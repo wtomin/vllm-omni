@@ -74,7 +74,7 @@ def test_cfg_parallel_lossless():
     通过调用 text_to_image.py 脚本，对比开启和不开启 cfg-parallel 时的输出，验证是否无损。
     """
     model_name = "riverclouds/qwen_image_random"
-    prompt = "a photo of a cat sitting on a laptop keyboard"
+    prompt = "'a photo of a cat sitting on a laptop keyboard'"
     seed = 42
     height = 256
     width = 256
@@ -103,6 +103,7 @@ def test_cfg_parallel_lossless():
         common_params = {
             "model": model_name,
             "prompt": prompt,
+            "negative_prompt": "'ugly, unclear'",
             "seed": seed,
             "height": height,
             "width": width,
