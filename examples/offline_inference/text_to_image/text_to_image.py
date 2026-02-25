@@ -16,18 +16,6 @@ from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.platforms import current_omni_platform
 
 
-def load_prompts(prompt_file: str | Path) -> list[str]:
-    """Load prompts from a text file (one prompt per line, blank lines ignored)."""
-    path = Path(prompt_file)
-    if not path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {path}")
-    lines = path.read_text(encoding="utf-8").splitlines()
-    prompts = [ln.strip() for ln in lines if ln.strip()]
-    if not prompts:
-        raise ValueError(f"Prompt file is empty: {path}")
-    return prompts
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate an image with Qwen-Image.")
     parser.add_argument(
@@ -37,11 +25,6 @@ def parse_args() -> argparse.Namespace:
         "Qwen/Qwen-Image, Tongyi-MAI/Z-Image-Turbo, Qwen/Qwen-Image-2512",
     )
     parser.add_argument("--prompt", default="a cup of coffee on the table", help="Text prompt for image generation.")
-    parser.add_argument(
-        "--prompt-file",
-        default=None,
-        help="File containing text prompts for image generation. If provided, --prompt will be ignored.",
-    )
     parser.add_argument(
         "--negative-prompt",
         default=None,
@@ -266,25 +249,12 @@ def main():
     print(f"  Image size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")
 
-    if args.prompt_file is not None:
-        assert isinstance(args.prompt_file, str) and os.path.exists(args.prompt_file), (
-            "Prompt file must be a valid path"
-        )
-        prompts = load_prompts(args.prompt_file)
-    elif args.prompt is not None:
-        prompts = [args.prompt]
-    else:
-        raise ValueError("Either --prompt-file or --prompt must be provided")
-
     generation_start = time.perf_counter()
     outputs = omni.generate(
-        [
-            {
-                "prompt": prompt,
-                "negative_prompt": args.negative_prompt,
-            }
-            for prompt in prompts
-        ],
+        {
+            "prompt": args.prompt,
+            "negative_prompt": args.negative_prompt,
+        },
         OmniDiffusionSamplingParams(
             height=args.height,
             width=args.width,
