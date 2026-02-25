@@ -22,7 +22,8 @@ Usage:
       --model Qwen/Qwen-Image-2512 \\
       --output-dir ./compat_results \\
       --steps 30 \\
-      --num-prompts 20
+      --num-prompts 20 \\
+      --prompt-file ./prompts.txt
 
   python analyze_compat_results.py \\
       --results-dir ./compat_results/cfg_parallel \\
@@ -42,6 +43,7 @@ import argparse
 import json
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 from pathlib import Path
@@ -91,31 +93,22 @@ FEATURE_REGISTRY: dict[str, dict] = {
     },
 }
 
-# ── 20 diverse prompts ────────────────────────────────────────────────────────
-ALL_PROMPTS: list[str] = [
-    "a majestic snow-capped mountain reflected in a crystal-clear alpine lake at sunrise",
-    "a steaming cup of matcha tea on a wooden table with cherry blossoms in the background",
-    "an astronaut riding a horse through a neon-lit cyberpunk city at night",
-    "a photorealistic portrait of an elderly fisherman with weathered skin and kind eyes",
-    "a dense tropical rainforest with golden sunbeams piercing the canopy and exotic birds",
-    "a cozy bookshop interior with warm lamp light, stacked books, and rain on the window",
-    "an intricate mandala made of flowers and geometric shapes with vibrant colors",
-    "a child blowing soap bubbles in a sunlit meadow filled with wildflowers",
-    "a futuristic space station orbiting a blue-green exoplanet with twin moons",
-    "a traditional Japanese tea ceremony in a minimalist wooden room with a garden view",
-    "an underwater coral reef teeming with colorful tropical fish and sea turtles",
-    "a rustic farmhouse kitchen with fresh bread, hanging herbs, and vegetables",
-    "a wolf howling at the full moon on a snow-covered hilltop under the northern lights",
-    "a vintage steam locomotive crossing a stone viaduct over a misty valley at dawn",
-    "a vibrant market in Marrakech with colorful spices, textiles, and lanterns",
-    "a serene zen garden with raked sand, moss-covered rocks, and a koi pond",
-    "a dramatic lightning storm over the ocean with a lighthouse in the foreground",
-    "a whimsical fairy-tale castle on a floating island above the clouds at golden hour",
-    "a macro photograph of a dewdrop on a spider web capturing a forest reflection",
-    "a bustling Tokyo street at night with neon signs and reflections in rain puddles",
-]
-
 NEGATIVE_PROMPT = "low quality, blurry, distorted, watermark, noise"
+
+# Default prompt file bundled alongside this script
+_DEFAULT_PROMPT_FILE = Path(__file__).resolve().parent / "prompts.txt"
+
+
+def load_prompts(prompt_file: str | Path) -> list[str]:
+    """Load prompts from a text file (one prompt per line, blank lines ignored)."""
+    path = Path(prompt_file)
+    if not path.exists():
+        raise FileNotFoundError(f"Prompt file not found: {path}")
+    lines = path.read_text(encoding="utf-8").splitlines()
+    prompts = [ln.strip() for ln in lines if ln.strip()]
+    if not prompts:
+        raise ValueError(f"Prompt file is empty: {path}")
+    return prompts
 
 
 # ── Helper utilities ──────────────────────────────────────────────────────────
@@ -287,15 +280,21 @@ def run_single_prompt(
     rc_path = cfg_dir / f"prompt_{prompt_idx:02d}.exitcode"
 
     seed = args.seed + prompt_idx
+
+    # Write the single prompt to a temporary file and pass it via --prompt-file
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as tf:
+        tf.write(prompt + "\n")
+        prompt_file_path = tf.name
+
     cmd = [
         sys.executable,
         str(t2i_script),
         "--model",
         args.model,
-        "--prompt",
-        f"'{prompt}'",
+        "--prompt-file",
+        prompt_file_path,
         "--negative-prompt",
-        f"'{NEGATIVE_PROMPT}'",
+        NEGATIVE_PROMPT,
         "--output",
         str(img_path),
         "--num-inference-steps",
@@ -318,6 +317,7 @@ def run_single_prompt(
         print()
         print(f"    DRY-RUN: {' '.join(cmd)}")
         rc_path.write_text("0")
+        Path(prompt_file_path).unlink(missing_ok=True)
         return True
 
     t0 = time.monotonic()
@@ -325,6 +325,7 @@ def run_single_prompt(
     elapsed_ms = (time.monotonic() - t0) * 1_000
     rc = result.returncode
 
+    Path(prompt_file_path).unlink(missing_ok=True)
     log_path.write_bytes(result.stdout)
     rc_path.write_text(str(rc))
 
@@ -454,10 +455,15 @@ def _parse_args() -> argparse.Namespace:
         help="Base random seed; prompt i uses seed+i.",
     )
     p.add_argument(
+        "--prompt-file",
+        default=str(_DEFAULT_PROMPT_FILE),
+        help=("Path to a text file with one prompt per line. (default: prompts.txt next to this script)"),
+    )
+    p.add_argument(
         "--num-prompts",
         type=int,
         default=20,
-        help="Number of prompts to use (1–20, drawn from the built-in list).",
+        help="Number of prompts to use (taken from the top of --prompt-file).",
     )
     p.add_argument(
         "--dry-run",
@@ -488,8 +494,13 @@ def main() -> int:
         print(f"[ERROR] {exc}", file=sys.stderr)
         return 1
 
-    num_prompts = max(1, min(args.num_prompts, len(ALL_PROMPTS)))
-    prompts = ALL_PROMPTS[:num_prompts]
+    try:
+        all_prompts = load_prompts(args.prompt_file)
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[ERROR] {exc}", file=sys.stderr)
+        return 1
+    num_prompts = max(1, min(args.num_prompts, len(all_prompts)))
+    prompts = all_prompts[:num_prompts]
     gpu_count = get_gpu_count()
     row_dir = Path(args.output_dir) / args.baseline_feature
     row_dir.mkdir(parents=True, exist_ok=True)
