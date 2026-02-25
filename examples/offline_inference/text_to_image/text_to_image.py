@@ -50,11 +50,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--prompt", default="a cup of coffee on the table", help="Text prompt for image generation.")
     parser.add_argument(
-        "--prompt-file",
-        default=None,
-        help="File containing text prompts for image generation. If provided, --prompt will be ignored.",
-    )
-    parser.add_argument(
         "--negative-prompt",
         default=None,
         help="negative prompt for classifier-free conditional guidance.",
@@ -382,13 +377,10 @@ def main():
         extra_args["lora_scale"] = args.lora_scale
 
     outputs = omni.generate(
-        [
-            {
-                "prompt": prompt,
-                "negative_prompt": args.negative_prompt,
-            }
-            for prompt in prompts
-        ],
+        {
+            "prompt": args.prompt,
+            "negative_prompt": args.negative_prompt,
+        },
         OmniDiffusionSamplingParams(
             height=args.height,
             width=args.width,
