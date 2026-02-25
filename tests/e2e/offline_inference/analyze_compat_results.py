@@ -210,11 +210,15 @@ def scan_config_dir(cfg_dir: Path) -> dict:
         log_data = parse_log(log_path)
         img = load_image(img_path) if img_path.exists() else None
 
+        success = rc == 0 and img is not None
+        if not success:
+            print(f"  Prompt {idx:02d} failed: exitcode={rc}, image={img is not None}")
+
         prompt_results.append(
             {
                 "idx": idx,
                 "exitcode": rc,
-                "success": rc == 0 and img is not None,
+                "success": success,
                 "image": img,
                 "img_path": str(img_path),
                 "log_path": str(log_path),
