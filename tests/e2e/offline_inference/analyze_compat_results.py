@@ -2,8 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """analyze_compat_results.py — Feature compatibility analysis script.
 
-Reads the directory tree produced by ``run_compat_test.py`` (or the legacy
-``run_compat_test.sh``) and generates:
+Reads the directory tree produced by ``run_compat_test.py`` (using batch_text_to_image.py)
+and generates:
 
   • Per-prompt image quality metrics (mean / max pixel diff vs baseline)
   • Per-config performance summary (generation time, speedup)
@@ -18,13 +18,16 @@ Expected directory layout (written by run_compat_test.py):
     manifest.json                 top-level test metadata
     baseline/
       config_info.json            config metadata
+      batch_generation.log        batch processing log with timing info
+      batch_generation.exitcode   batch exit code
       prompt_00.png               generated image
-      prompt_00.log               full stdout + stderr from text_to_image.py
+      prompt_00.log               per-prompt log (placeholder for batch runs)
       prompt_00.exitcode          exit code ("0" or non-zero)
       prompt_01.png / .log / .exitcode
       ...
     cfg_parallel/
       config_info.json
+      batch_generation.log
       prompt_00.png / .log / .exitcode
       ...
     cfg_parallel+teacache/
@@ -69,6 +72,8 @@ LOSSY_MAX_THRESHOLD = 0.60
 # ===========================================================================
 
 _GEN_TIME_RE = re.compile(r"Total generation time:\s+([\d.]+)\s+seconds")
+_AVG_GEN_TIME_RE = re.compile(r"Average generation time:\s+([\d.]+)\s+seconds")
+_PROMPT_GEN_TIME_RE = re.compile(r"Prompt\s+(\d+):\s+([\d.]+)\s+seconds")
 _SAVED_RE = re.compile(r"Saved generated image to (.+)")
 
 
@@ -105,6 +110,38 @@ def parse_log(log_path: Path) -> dict:
         "has_error": has_error,
         "error_snippet": error_snippet,
     }
+
+
+def parse_batch_log(batch_log_path: Path, num_prompts: int) -> dict[int, float]:
+    """Extract per-prompt generation times from batch_generation.log.
+
+    Returns
+    -------
+    dict[int, float]
+        Mapping from prompt index to generation time in milliseconds.
+    """
+    if not batch_log_path.exists():
+        return {}
+    
+    text = batch_log_path.read_text(errors="replace")
+    
+    # Try to extract per-prompt generation times
+    prompt_times: dict[int, float] = {}
+    for match in _PROMPT_GEN_TIME_RE.finditer(text):
+        prompt_idx = int(match.group(1)) - 1  # Convert to 0-based index
+        gen_time_sec = float(match.group(2))
+        prompt_times[prompt_idx] = gen_time_sec * 1_000.0
+    
+    # If per-prompt times not found, try to use average generation time
+    if not prompt_times:
+        avg_match = _AVG_GEN_TIME_RE.search(text)
+        if avg_match:
+            avg_time_ms = float(avg_match.group(1)) * 1_000.0
+            # Assign average time to all prompts
+            for idx in range(num_prompts):
+                prompt_times[idx] = avg_time_ms
+    
+    return prompt_times
 
 
 def read_exitcode(rc_path: Path) -> int:
@@ -185,6 +222,15 @@ def scan_config_dir(cfg_dir: Path) -> dict:
             }
         )
         idx += 1
+
+    # Check for batch generation log and extract timing information
+    batch_log_path = cfg_dir / "batch_generation.log"
+    if batch_log_path.exists() and prompt_results:
+        batch_times = parse_batch_log(batch_log_path, len(prompt_results))
+        # Update prompt results with batch generation times
+        for p in prompt_results:
+            if p["idx"] in batch_times:
+                p["gen_time_ms"] = batch_times[p["idx"]]
 
     all_success = bool(prompt_results) and all(p["success"] for p in prompt_results)
 
