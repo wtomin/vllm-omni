@@ -287,7 +287,7 @@ def run_batch_prompts(
         "--prompt-file",
         str(prompt_file),
         "--negative-prompt",
-        NEGATIVE_PROMPT,
+        f"'{NEGATIVE_PROMPT}'",
         "--output",
         str(cfg_dir),
         "--num-inference-steps",
