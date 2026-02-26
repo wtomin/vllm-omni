@@ -69,131 +69,166 @@ def run_text_to_image(cfg_parallel_size: int, output_path: str, **kwargs) -> Pat
     return output
 
 
+def _run_single_steps_comparison(
+    steps: int,
+    output_dir: Path,
+    common_params: dict,
+    tolerance: float,
+) -> tuple[bool, float]:
+    """
+    对单个 num_inference_steps 值运行 cfg-parallel 对比测试。
+
+    Returns:
+        (passed, max_diff)
+    """
+    print("\n" + "=" * 80)
+    print(f"num_inference_steps = {steps}")
+    print("=" * 80)
+
+    img_with_cfg_path = output_dir / f"steps{steps}_cfg_parallel_enabled.png"
+    img_without_cfg_path = output_dir / f"steps{steps}_cfg_parallel_disabled.png"
+
+    params = {**common_params, "num_inference_steps": steps}
+
+    print(f"\n[1/2] 生成图像 (cfg-parallel-size=2, 开启 CFG 并行)...")
+    print("-" * 80)
+    run_text_to_image(cfg_parallel_size=2, output_path=str(img_with_cfg_path), **params)
+
+    print(f"\n[2/2] 生成图像 (cfg-parallel-size=1, 不开启 CFG 并行)...")
+    print("-" * 80)
+    run_text_to_image(cfg_parallel_size=1, output_path=str(img_without_cfg_path), **params)
+
+    image_with_cfg = Image.open(img_with_cfg_path)
+    image_without_cfg = Image.open(img_without_cfg_path)
+
+    img_array_with_cfg = np.array(image_with_cfg)
+    img_array_without_cfg = np.array(image_without_cfg)
+
+    assert img_array_with_cfg.shape == img_array_without_cfg.shape, (
+        f"图像形状不匹配: {img_array_with_cfg.shape} vs {img_array_without_cfg.shape}"
+    )
+    print(f"✓ 图像形状一致: {img_array_with_cfg.shape}")
+
+    # 归一化到 [0, 255] 范围后计算像素差异
+    arr_with = img_array_with_cfg.astype(np.float32)
+    arr_without = img_array_without_cfg.astype(np.float32)
+    max_val_with = arr_with.max()
+    max_val_without = arr_without.max()
+    arr_with_norm = arr_with / max_val_with * 255.0 if max_val_with > 0 else arr_with
+    arr_without_norm = arr_without / max_val_without * 255.0 if max_val_without > 0 else arr_without
+
+    pixel_diff = np.abs(arr_with_norm - arr_without_norm)
+    max_diff = float(np.max(pixel_diff))
+    mean_diff = float(np.mean(pixel_diff))
+    num_different_pixels = int(np.sum(pixel_diff > 0))
+    total_pixels = pixel_diff.size
+
+    print(f"\n归一化后像素差异统计 (各自归一化到 0-255):")
+    print(f"  - 最大像素差异: {max_diff:.6f}")
+    print(f"  - 平均像素差异: {mean_diff:.6f}")
+    print(f"  - 不同像素数量: {num_different_pixels} / {total_pixels}")
+    print(f"  - 不同像素比例: {num_different_pixels / total_pixels * 100:.6f}%")
+
+    print(f"\n✓ 已保存图像:")
+    print(f"  - cfg-parallel-size=2: {img_with_cfg_path}")
+    print(f"  - cfg-parallel-size=1: {img_without_cfg_path}")
+
+    if max_diff > 0:
+        diff_path = output_dir / f"steps{steps}_pixel_difference.png"
+        diff_normalized = (pixel_diff / max_diff * 255).astype(np.uint8)
+        if len(diff_normalized.shape) == 3 and diff_normalized.shape[2] == 3:
+            diff_gray = np.mean(diff_normalized, axis=2).astype(np.uint8)
+            diff_img = Image.fromarray(diff_gray, mode='L')
+        else:
+            diff_img = Image.fromarray(diff_normalized)
+        diff_img.save(diff_path)
+        print(f"  - 差异可视化: {diff_path}")
+
+    passed = max_diff <= tolerance
+    if passed:
+        print(f"\n✅ steps={steps} 通过: 归一化最大像素差异 {max_diff:.6f} <= {tolerance}")
+    else:
+        print(f"\n❌ steps={steps} 失败: 归一化最大像素差异 {max_diff:.6f} > {tolerance}")
+
+    return passed, max_diff
+
+
 def test_cfg_parallel_lossless():
     """
-    通过调用 text_to_image.py 脚本，对比开启和不开启 cfg-parallel 时的输出，验证是否无损。
+    遍历多个 num_inference_steps，对比开启和不开启 cfg-parallel 时的输出，验证是否无损。
     """
-    model_name = "riverclouds/qwen_image_random"
+    model_name = "Qwen/Qwen-Image-2512"
     prompt = "'a photo of a cat sitting on a laptop keyboard'"
     seed = 42
     height = 256
     width = 256
-    num_inference_steps = 4
+    num_inference_steps_list = [2, 4, 8, 16]
     guidance_scale = 3.0  # 必须 > 1.0 才能触发 CFG
-    
+    # tolerance 单位为归一化后的像素值（0-255 范围），仅允许浮点精度误差
+    tolerance = 1e-3
+
     output_dir = Path("test_outputs")
     output_dir.mkdir(exist_ok=True)
-    
-    img_with_cfg_path = output_dir / "cfg_parallel_enabled.png"
-    img_without_cfg_path = output_dir / "cfg_parallel_disabled.png"
-    
-    try:
-        print("=" * 80)
-        print("CFG-Parallel 无损测试")
-        print("=" * 80)
-        print(f"测试模型: {model_name}")
-        print(f"提示词: {prompt}")
-        print(f"分辨率: {width}x{height}")
-        print(f"推理步数: {num_inference_steps}")
-        print(f"Guidance Scale: {guidance_scale}")
-        print(f"随机种子: {seed}")
-        print("=" * 80)
-        
-        # 测试参数
-        common_params = {
-            "model": model_name,
-            "prompt": prompt,
-            "negative_prompt": "'ugly, unclear'",
-            "seed": seed,
-            "height": height,
-            "width": width,
-            "num_inference_steps": num_inference_steps,
-            "guidance_scale": guidance_scale,
-            "num_images_per_prompt": 1,
-        }
-        
-        # [1/2] 生成开启 cfg-parallel 的图像
-        print("\n[1/2] 生成图像 (cfg-parallel-size=2, 开启 CFG 并行)...")
-        print("-" * 80)
-        run_text_to_image(
-            cfg_parallel_size=2,
-            output_path=str(img_with_cfg_path),
-            **common_params
-        )
-        
-        # [2/2] 生成不开启 cfg-parallel 的图像
-        print("\n[2/2] 生成图像 (cfg-parallel-size=1, 不开启 CFG 并行)...")
-        print("-" * 80)
-        run_text_to_image(
-            cfg_parallel_size=1,
-            output_path=str(img_without_cfg_path),
-            **common_params
-        )
-        
-        # 加载图像并对比
-        print("\n" + "=" * 80)
-        print("对比结果分析")
-        print("=" * 80)
-        
-        image_with_cfg = Image.open(img_with_cfg_path)
-        image_without_cfg = Image.open(img_without_cfg_path)
-        
-        img_array_with_cfg = np.array(image_with_cfg)
-        img_array_without_cfg = np.array(image_without_cfg)
-        
-        # 验证形状一致
-        assert img_array_with_cfg.shape == img_array_without_cfg.shape, \
-            f"图像形状不匹配: {img_array_with_cfg.shape} vs {img_array_without_cfg.shape}"
-        print(f"✓ 图像形状一致: {img_array_with_cfg.shape}")
-        
-        # 计算像素差异
-        pixel_diff = np.abs(img_array_with_cfg.astype(np.float32) - img_array_without_cfg.astype(np.float32))
-        max_diff = np.max(pixel_diff)
-        mean_diff = np.mean(pixel_diff)
-        num_different_pixels = np.sum(pixel_diff > 0)
-        total_pixels = pixel_diff.size
-        
-        print(f"\n像素差异统计:")
-        print(f"  - 最大像素差异: {max_diff}")
-        print(f"  - 平均像素差异: {mean_diff:.6f}")
-        print(f"  - 不同像素数量: {num_different_pixels} / {total_pixels}")
-        print(f"  - 不同像素比例: {num_different_pixels / total_pixels * 100:.6f}%")
-        
-        print(f"\n✓ 已保存图像:")
-        print(f"  - cfg-parallel-size=2: {img_with_cfg_path}")
-        print(f"  - cfg-parallel-size=1: {img_without_cfg_path}")
-        
-        # 如果有差异，保存差异图
-        if max_diff > 0:
-            diff_path = output_dir / "pixel_difference.png"
-            # 将差异图归一化到 0-255 范围
-            diff_normalized = (pixel_diff / max_diff * 255).astype(np.uint8)
-            if len(diff_normalized.shape) == 3 and diff_normalized.shape[2] == 3:
-                # RGB 图像，转换为灰度图以便查看
-                diff_gray = np.mean(diff_normalized, axis=2).astype(np.uint8)
-                diff_img = Image.fromarray(diff_gray, mode='L')
-            else:
-                diff_img = Image.fromarray(diff_normalized)
-            diff_img.save(diff_path)
-            print(f"  - 差异可视化: {diff_path}")
-        
-        # 最终断言：cfg-parallel 应该是无损的
-        print("\n" + "=" * 80)
-        if max_diff == 0:
-            print("✅ 测试通过: cfg-parallel 是无损加速，像素差异为零！")
-            print("=" * 80)
-        else:
-            print("❌ 测试失败: cfg-parallel 存在像素差异！")
-            print("=" * 80)
-            raise AssertionError(
-                f"cfg-parallel 应该是无损加速，但发现最大像素差异为 {max_diff}"
+
+    print("=" * 80)
+    print("CFG-Parallel 无损测试")
+    print("=" * 80)
+    print(f"测试模型: {model_name}")
+    print(f"提示词: {prompt}")
+    print(f"分辨率: {width}x{height}")
+    print(f"推理步数列表: {num_inference_steps_list}")
+    print(f"Guidance Scale: {guidance_scale}")
+    print(f"随机种子: {seed}")
+    print("=" * 80)
+
+    common_params = {
+        "model": model_name,
+        "prompt": prompt,
+        "negative_prompt": "'ugly, unclear'",
+        "seed": seed,
+        "height": height,
+        "width": width,
+        "guidance_scale": guidance_scale,
+        "num_images_per_prompt": 1,
+    }
+
+    failures: list[tuple[int, float]] = []
+
+    for steps in num_inference_steps_list:
+        try:
+            passed, max_diff = _run_single_steps_comparison(
+                steps=steps,
+                output_dir=output_dir,
+                common_params=common_params,
+                tolerance=tolerance,
             )
-        
-    except Exception as e:
-        print(f"\n❌ 测试过程中出现错误: {e}")
-        import traceback
-        traceback.print_exc()
-        raise
+            if not passed:
+                failures.append((steps, max_diff))
+        except Exception as e:
+            print(f"\n❌ steps={steps} 测试过程中出现错误: {e}")
+            import traceback
+            traceback.print_exc()
+            failures.append((steps, float("nan")))
+
+    print("\n" + "=" * 80)
+    print("汇总结果")
+    print("=" * 80)
+    for steps in num_inference_steps_list:
+        failed_steps = [s for s, _ in failures]
+        status = "❌ 失败" if steps in failed_steps else "✅ 通过"
+        print(f"  steps={steps:>3}: {status}")
+
+    if failures:
+        print("=" * 80)
+        details = ", ".join(
+            f"steps={s} (max_diff={d:.6f})" for s, d in failures
+        )
+        raise AssertionError(
+            f"cfg-parallel 在以下配置存在超出阈值的像素差异: {details}"
+        )
+
+    print("✅ 所有推理步数测试通过: cfg-parallel 是无损加速！")
+    print("=" * 80)
 
 
 if __name__ == "__main__":
