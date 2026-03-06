@@ -337,16 +337,6 @@ class OmniServeCommand(CLISubcommand):
             "Equivalent to setting DiffusionParallelConfig.cfg_parallel_size.",
         )
         omni_config_group.add_argument(
-            "--tp",
-            "--tensor-parallel-size",
-            dest="tensor_parallel_size",
-            type=int,
-            default=1,
-            help="Tensor Parallelism degree for diffusion models. "
-            "Shards model weights across GPUs to reduce per-GPU memory usage. "
-            "Equivalent to setting DiffusionParallelConfig.tensor_parallel_size.",
-        )
-        omni_config_group.add_argument(
             "--vae-patch-parallel-size",
             type=int,
             default=1,
