@@ -29,7 +29,7 @@ def update_environment_variables(envs_dict: dict[str, str]):
 
 def seed_everything(seed: int):
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
+    current_omni_platform.manual_seed(seed)
 
 
 class TestAttentionModel(torch.nn.Module):
