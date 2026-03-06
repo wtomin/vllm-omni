@@ -115,16 +115,16 @@ Both models require monitoring the following server variants per [Parallelism Co
 | Variant | Description | `parallel_config` / Engine Args |
 |---------|-------------|-------------------------------|
 | **baseline** | Single-GPU | default |
-| **cfg-parallel** | cfg-size=2 | |
-| **sp2-ulysses** | SP=2 (Ulysses) | `ulysses_degree=2`, `ring_degree=1` |
-| **sp4-ulysses** | SP=2 (Ulysses) | `ulysses_degree=2`, `ring_degree=1` |
-| **tp2** | TP=2 | `tensor_parallel_size=2` |
-| **tp4** | TP=2 | `tensor_parallel_size=2` |
-| **sp2-ring** | SP=2 (Ring) | `ulysses_degree=1`, `ring_degree=2` |
-| **sp4-ring** | SP=2 (Ring) | `ulysses_degree=1`, `ring_degree=2` |
-| **fp8** | FP8 quantization (W8A8) | `quantization="fp8"` |
-| **cpu-offload** | Model-level CPU offload | `enable_cpu_offload=True` |
-| **layerwise-offload** | Layer-wise (block) CPU offload | `enable_layerwise_offload=True` |
+| **cfg-parallel** | CFG-parallel=2 | `parallel_config.cfg_parallel_size=2` |
+| **sp2-ulysses** | SP=2 (Ulysses) | `parallel_config.ulysses_degree=2`, `parallel_config.ring_degree=1` |
+| **sp4-ulysses** | SP=4 (Ulysses) | `parallel_config.ulysses_degree=4`, `parallel_config.ring_degree=1` |
+| **tp2** | TP=2 | `engine_args.tensor_parallel_size=2` |
+| **tp4** | TP=4 | `engine_args.tensor_parallel_size=4` |
+| **sp2-ring** | SP=2 (Ring) | `parallel_config.ulysses_degree=1`, `parallel_config.ring_degree=2` |
+| **sp4-ring** | SP=4 (Ring) | `parallel_config.ulysses_degree=1`, `parallel_config.ring_degree=4` |
+| **fp8** | FP8 quantization (W8A8) | `engine_args.quantization="fp8"` |
+| **cpu-offload** | Model-level CPU offload | `engine_args.enable_cpu_offload=True` |
+| **layerwise-offload** | Layer-wise (block) CPU offload | `engine_args.enable_layerwise_offload=True` |
 
 #### Qwen-Image (t2i) — Configuration Matrix
 
@@ -339,7 +339,10 @@ The schema aligns with `tests/perf/tests/test.json`: `num_prompts` and `max_conc
       "stage_config_name": "wan2_2.yaml",
       "update": {
         "stage_args": {
-          "0": { "engine_args.sequence_parallel_size": 2 }
+          "0": {
+            "parallel_config.ulysses_degree": 2,
+            "parallel_config.ring_degree": 1
+          }
         }
       }
     },
