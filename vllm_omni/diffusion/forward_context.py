@@ -32,7 +32,7 @@ class ForwardContext:
     sp_original_seq_len: int | None = None
 
     # Set by registry when _sp_plan hooks are applied. When False, sp_active defaults to True
-    # when sequence_parallel_size > 1 (for manual SP: LongCat, standalone tests, etc.)
+    # when sequence_parallel_size > 1 (for manual SP, standalone tests, etc.)
     sp_plan_hooks_applied: bool = False
     # SP active scope tracking within the _sp_plan hook mechanism.
     # Tracks the depth of SP sharding - incremented on shard, decremented on gather
@@ -51,7 +51,9 @@ class ForwardContext:
             return self._sp_shard_depth > 0
         # No _sp_plan: assume SP active when configured (manual SP, standalone tests)
         if self.omni_diffusion_config is None:
-            return False
+            raise ValueError(
+                "omni_diffusion_config is not set! Please call with set_forward_context(omni_diffusion_config=...)."
+            )
         try:
             sp_size = self.omni_diffusion_config.parallel_config.sequence_parallel_size
             return sp_size is not None and sp_size > 1
