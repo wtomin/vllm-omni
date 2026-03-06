@@ -82,13 +82,13 @@ Metrics currently emitted:
 **`Qwen/Qwen-Image`** (`QwenImagePipeline`)
 - Task: t2i
 - Backend: `vllm-omni` (`/v1/chat/completions`)
-- Representative resolutions: 512×512, 1024×1024
+- Representative resolutions: 1024×1024
 
 **`Wan2.2`** (`WanPipeline`)
 - Task: t2v
 - Backend: `vllm-omni` (`/v1/chat/completions`)
 - Representative resolution: 480×640, 720×1280
-- Representative frame counts: 16, 49, 81 frames at 16 fps
+- Representative frame counts: 49, 81 frames at 16 fps
 
 ---
 
@@ -105,19 +105,26 @@ Each model × task combination is benchmarked as a **concurrency sweep**, mirror
 | Concurrency sweep | `[1, 4, 10]` | `[1, 4, 10]` (same) |
 | `num_prompts` | `[10, 40, 100]` | `[5, 20, 50]` (t2i) / `[3, 12, 30]` (t2v, slower) |
 | Dataset variants | `random` + `random-mm` | `vbench` (fixed res) + `trace` (heterogeneous res) |
-| Server variants | standard + `async_chunk` | baseline + SP=2 + TP=2 + SP=2&ring=2 (see [Parallelism Config](./diffusion_dashboard_parallelism_config.md)) |
+| Server variants | standard + `async_chunk` | baseline + SP=2 + TP=2 + SP=2&ring=2 + fp8 + cpu-offload + layerwise-offload (see [Parallelism Config](./diffusion_dashboard_parallelism_config.md)) |
 | Baseline strategy | Loose smoke-test thresholds | Loose initially; tighten after real data collected |
 
 #### Parallelism Variants (Qwen-Image & Wan2.2)
 
-Both models require monitoring **four** server variants per [Parallelism Config](./diffusion_dashboard_parallelism_config.md):
+Both models require monitoring the following server variants per [Parallelism Config](./diffusion_dashboard_parallelism_config.md):
 
-| Variant | Description | `parallel_config` |
-|---------|-------------|------------------|
+| Variant | Description | `parallel_config` / Engine Args |
+|---------|-------------|-------------------------------|
 | **baseline** | Single-GPU | default |
+| **cfg-parallel** | cfg-size=2 | |
 | **sp2-ulysses** | SP=2 (Ulysses) | `ulysses_degree=2`, `ring_degree=1` |
+| **sp4-ulysses** | SP=2 (Ulysses) | `ulysses_degree=2`, `ring_degree=1` |
 | **tp2** | TP=2 | `tensor_parallel_size=2` |
+| **tp4** | TP=2 | `tensor_parallel_size=2` |
 | **sp2-ring** | SP=2 (Ring) | `ulysses_degree=1`, `ring_degree=2` |
+| **sp4-ring** | SP=2 (Ring) | `ulysses_degree=1`, `ring_degree=2` |
+| **fp8** | FP8 quantization (W8A8) | `quantization="fp8"` |
+| **cpu-offload** | Model-level CPU offload | `enable_cpu_offload=True` |
+| **layerwise-offload** | Layer-wise (block) CPU offload | `enable_layerwise_offload=True` |
 
 #### Qwen-Image (t2i) — Configuration Matrix
 
@@ -131,6 +138,9 @@ Two dataset variants × four parallelism variants × one concurrency sweep each.
 | `qi-512-vbench-sp2-ulysses` | vbench | 512×512 | 20 | sp2-ulysses | [5, 20, 50] | [1, 4, 10] | 3.0 |
 | `qi-512-vbench-tp2` | vbench | 512×512 | 20 | tp2 | [5, 20, 50] | [1, 4, 10] | 3.0 |
 | `qi-512-vbench-sp2-ring` | vbench | 512×512 | 20 | sp2-ring | [5, 20, 50] | [1, 4, 10] | 3.0 |
+| `qi-512-vbench-fp8` | vbench | 512×512 | 20 | fp8 | [5, 20, 50] | [1, 4, 10] | 3.0 |
+| `qi-512-vbench-cpu-offload` | vbench | 512×512 | 20 | cpu-offload | [5, 20, 50] | [1, 4, 10] | 3.0 |
+| `qi-512-vbench-layerwise-offload` | vbench | 512×512 | 20 | layerwise-offload | [5, 20, 50] | [1, 4, 10] | 3.0 |
 
 #### Wan2.2 (t2v) — Configuration Matrix
 
@@ -144,6 +154,9 @@ Two dataset variants × four parallelism variants × one concurrency sweep each.
 | `wan-480-vbench-sp2-ulysses` | vbench | 480×640 | 49 | 20 | sp2-ulysses | [3, 12, 30] | [1, 4, 10] | 3.0 |
 | `wan-480-vbench-tp2` | vbench | 480×640 | 49 | 20 | tp2 | [3, 12, 30] | [1, 4, 10] | 3.0 |
 | `wan-480-vbench-sp2-ring` | vbench | 480×640 | 49 | 20 | sp2-ring | [3, 12, 30] | [1, 4, 10] | 3.0 |
+| `wan-480-vbench-fp8` | vbench | 480×640 | 49 | 20 | fp8 | [3, 12, 30] | [1, 4, 10] | 3.0 |
+| `wan-480-vbench-cpu-offload` | vbench | 480×640 | 49 | 20 | cpu-offload | [3, 12, 30] | [1, 4, 10] | 3.0 |
+| `wan-480-vbench-layerwise-offload` | vbench | 480×640 | 49 | 20 | layerwise-offload | [3, 12, 30] | [1, 4, 10] | 3.0 |
 
 ### 4.2 Config File Format
 
@@ -250,6 +263,70 @@ The schema aligns with `tests/perf/tests/test.json`: `num_prompts` and `max_conc
         "baseline": {
           "throughput_qps": 0.01,
           "latency_p99": 9999.0,
+          "slo_attainment_rate": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "test_name": "test_qwen_image_fp8",
+    "server_params": {
+      "model": "Qwen/Qwen-Image",
+      "stage_config_name": "qwen_image.yaml",
+      "update": {
+        "stage_args": {
+          "0": { "engine_args.quantization": "fp8" }
+        }
+      }
+    },
+    "benchmark_params": [
+      {
+        "dataset_name": "vbench",
+        "task": "t2i",
+        "width": 512,
+        "height": 512,
+        "num_inference_steps": 20,
+        "num_prompts": [5, 20, 50],
+        "max_concurrency": [1, 4, 10],
+        "slo": true,
+        "slo_scale": 3.0,
+        "warmup_requests": 2,
+        "warmup_num_inference_steps": 1,
+        "baseline": {
+          "throughput_qps": 0.01,
+          "latency_p99": 999.0,
+          "slo_attainment_rate": 0.0
+        }
+      }
+    ]
+  },
+  {
+    "test_name": "test_qwen_image_cpu_offload",
+    "server_params": {
+      "model": "Qwen/Qwen-Image",
+      "stage_config_name": "qwen_image.yaml",
+      "update": {
+        "stage_args": {
+          "0": { "engine_args.enable_cpu_offload": true }
+        }
+      }
+    },
+    "benchmark_params": [
+      {
+        "dataset_name": "vbench",
+        "task": "t2i",
+        "width": 512,
+        "height": 512,
+        "num_inference_steps": 20,
+        "num_prompts": [5, 20, 50],
+        "max_concurrency": [1, 4, 10],
+        "slo": true,
+        "slo_scale": 3.0,
+        "warmup_requests": 2,
+        "warmup_num_inference_steps": 1,
+        "baseline": {
+          "throughput_qps": 0.01,
+          "latency_p99": 999.0,
           "slo_attainment_rate": 0.0
         }
       }
