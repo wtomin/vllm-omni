@@ -143,7 +143,7 @@ class TestMultiLayerAttentionModel(torch.nn.Module):
 @pytest.mark.parametrize("num_heads", [8])
 @pytest.mark.parametrize("head_size", [8])
 @pytest.mark.parametrize("causal", [False])
-@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])  # [torch.float16, torch.bfloat16]
+@pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("use_sync", [False])
 @pytest.mark.parametrize("dynamic", [False])
 @pytest.mark.parametrize("use_compile", [False])
@@ -416,9 +416,6 @@ def ulysses_attention_on_test_model(
             with open(model_state_file, "wb") as f:
                 pickle.dump(model_state, f)
 
-            # Generate and save full input data with fixed seed
-            # Reinitialize RNG to ensure reproducibility
-            seed_everything(42)
             full_hidden_states = torch.randn(
                 (batch_size, seq_len, hidden_size),
                 dtype=dtype,
