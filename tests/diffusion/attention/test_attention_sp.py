@@ -27,6 +27,14 @@ def update_environment_variables(envs_dict: dict[str, str]):
         os.environ[k] = v
 
 
+def seed_everything(seed: int):
+    torch.manual_seed(seed)
+    if current_omni_platform.is_cuda_alike():
+        manual_seed_all = getattr(getattr(torch, current_omni_platform.device_type, None), "manual_seed_all", None)
+        if manual_seed_all:
+            manual_seed_all(seed)
+
+
 class TestAttentionModel(torch.nn.Module):
     """Test model using Attention layer."""
 
@@ -329,7 +337,7 @@ def ulysses_attention_on_test_model(
     """Run Ulysses attention test on a test model and save results for comparison."""
     # Use fixed seed for reproducibility across baseline and SP runs
     RANDOM_SEED = 42
-    current_omni_platform.seed_everything(RANDOM_SEED)
+    seed_everything(RANDOM_SEED)
 
     mode_str = "Baseline (no SP)" if is_baseline else f"SP (ulysses={ulysses_degree}, ring={ring_degree})"
     print(f"\n[{mode_str}] Rank {local_rank}/{world_size} - Random seed set to {RANDOM_SEED}")
@@ -413,9 +421,7 @@ def ulysses_attention_on_test_model(
 
             # Generate and save full input data with fixed seed
             # Reinitialize RNG to ensure reproducibility
-            torch.manual_seed(42)
-            if torch.cuda.is_available():
-                torch.cuda.manual_seed_all(42)
+            seed_everything(42)
             full_hidden_states = torch.randn(
                 (batch_size, seq_len, hidden_size),
                 dtype=dtype,
