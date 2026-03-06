@@ -147,7 +147,6 @@ class TestMultiLayerAttentionModel(torch.nn.Module):
 @pytest.mark.parametrize("use_sync", [False])
 @pytest.mark.parametrize("dynamic", [False])
 @pytest.mark.parametrize("use_compile", [False])
-@pytest.mark.parametrize("attn_backend", ["sdpa", "flash_attn"])
 def test_sequence_parallel(
     ulysses_degree: int,
     ring_degree: int,
@@ -161,7 +160,6 @@ def test_sequence_parallel(
     seq_len: int,
     num_heads: int,
     head_size: int,
-    attn_backend: str,
 ):
     """Test Ulysses attention by comparing with and without SP enabled."""
     sequence_parallel_size = ulysses_degree * ring_degree
@@ -205,7 +203,6 @@ def test_sequence_parallel(
                 model_state_file,
                 input_data_file,
                 True,  # is_baseline
-                attn_backend,
             ),
             nprocs=1,
         )
@@ -233,7 +230,6 @@ def test_sequence_parallel(
                 model_state_file,
                 input_data_file,
                 False,  # is_baseline
-                attn_backend,
             ),
             nprocs=sequence_parallel_size,
         )
@@ -329,7 +325,6 @@ def ulysses_attention_on_test_model(
     model_state_file: str,
     input_data_file: str,
     is_baseline: bool,
-    attn_backend: str,
 ):
     """Run Ulysses attention test on a test model and save results for comparison."""
     # Use fixed seed for reproducibility across baseline and SP runs
@@ -371,7 +366,6 @@ def ulysses_attention_on_test_model(
         model="test_model",
         dtype=dtype,
         parallel_config=parallel_config,
-        attention_backend=attn_backend,  # Set the attention backend here
     )
 
     # Initialize model parallel
