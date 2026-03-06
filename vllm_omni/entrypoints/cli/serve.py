@@ -219,6 +219,7 @@ class OmniServeCommand(CLISubcommand):
         )
         omni_config_group.add_argument(
             "--ring",
+            "--ring-degree",
             dest="ring_degree",
             type=int,
             default=None,
