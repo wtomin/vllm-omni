@@ -29,10 +29,7 @@ def update_environment_variables(envs_dict: dict[str, str]):
 
 def seed_everything(seed: int):
     torch.manual_seed(seed)
-    if current_omni_platform.is_cuda_alike():
-        manual_seed_all = getattr(getattr(torch, current_omni_platform.device_type, None), "manual_seed_all", None)
-        if manual_seed_all:
-            manual_seed_all(seed)
+    torch.cuda.manual_seed(seed)
 
 
 class TestAttentionModel(torch.nn.Module):
