@@ -52,13 +52,13 @@ class ForwardContext:
         # No _sp_plan: assume SP active when configured (manual SP, standalone tests)
         if self.omni_diffusion_config is None:
             raise ValueError(
-                "omni_diffusion_config is not set! Please call with set_forward_context(omni_diffusion_config=...)."
+                "omni_diffusion_config is not set when checking sp_active! "
+                "This usually means set_forward_context() was not called. "
+                "Please call with set_forward_context(omni_diffusion_config=...)."
             )
-        try:
-            sp_size = self.omni_diffusion_config.parallel_config.sequence_parallel_size
-            return sp_size is not None and sp_size > 1
-        except Exception:
-            return False
+
+        sp_size = self.omni_diffusion_config.parallel_config.sequence_parallel_size
+        return sp_size is not None and sp_size > 1
 
     def __post_init__(self):
         pass
