@@ -31,8 +31,9 @@ class ForwardContext:
     # Original sequence length before padding (for removing padding in gather)
     sp_original_seq_len: int | None = None
 
-    # Set by registry when _sp_plan hooks are applied. When False, sp_active defaults to True
-    # when sequence_parallel_size > 1 (for manual SP, standalone tests, etc.)
+    # Set by registry when _sp_plan hooks are applied.
+    # When True, sp_active is determined by _sp_shard_depth (for _sp_plan hooks)
+    # When False, sp_active defaults to True when sequence_parallel_size > 1 (for manual SP, standalone tests, etc.)
     sp_plan_hooks_applied: bool = False
     # SP active scope tracking within the _sp_plan hook mechanism.
     # Tracks the depth of SP sharding - incremented on shard, decremented on gather
