@@ -268,6 +268,7 @@ def _apply_sequence_parallel_if_enabled(model, od_config: OmniDiffusionConfig) -
         # update forward context sp_plan_hooks_applied
         ctx = get_forward_context()
         ctx.sp_plan_hooks_applied = applied_count > 0
+        logger.debug(f"Setting sp_plan_hooks_applied={ctx.sp_plan_hooks_applied} in ``ForwardContext``!")
 
         if applied_count == 0:
             logger.warning(

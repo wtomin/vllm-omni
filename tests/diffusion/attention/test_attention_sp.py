@@ -1,5 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+
+"""Tests for Ulysses + Ring sequence-parallel attention correctness.
+
+What is tested
+--------------
+* ``test_sequence_parallel`` verifies that the ``Attention`` layer produces
+  numerically equivalent results whether the sequence is processed on a single
+  rank (baseline, SP=1) or sharded across multiple ranks via Ulysses/Ring SP.
+  The test spawns two separate multi-process runs with ``torch.multiprocessing.spawn``:
+  1. Baseline   – world_size=1, ulysses_degree=1, ring_degree=1.
+  2. SP run     – world_size=ulysses_degree*ring_degree, each rank holds a
+                  contiguous slice of the full sequence.
+  After both runs, rank-0 output tensors are compared element-wise with a
+  tolerance appropriate for the dtype (bfloat16).
+
+SP-plan hooks are NOT applied in this test
+------------------------------------------
+``ForwardContext.sp_plan_hooks_applied`` remains ``False``.  As a result,
+``ForwardContext.sp_active`` falls back to the "no hooks" branch: SP is
+considered active whenever ``parallel_config.sequence_parallel_size > 1``.
+This makes the test self-contained and suitable for standalone CI runs that
+do not exercise the full model-registry pipeline.
+"""
+
 import os
 import pickle
 import tempfile
