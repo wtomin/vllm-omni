@@ -369,6 +369,10 @@ def run_benchmark(
 
     # Inject GPU memory metrics collected by the monitor.
     result.update(memory_metrics)
+    # overwrite the result file
+    with open(result_file, "w", encoding="utf-8") as f:
+        json.dump(result, f, indent=4)
+
     return result
 
 
