@@ -13,7 +13,6 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from datetime import datetime
@@ -28,6 +27,11 @@ from tests.utils import GPUMemoryMonitor
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "0"
+
+# Results directory: override via DIFFUSION_BENCHMARK_DIR env var.
+# Defaults to tests/perf/diffusion/results/ inside the repo.
+_DEFAULT_RESULT_DIR = Path(__file__).parent.parent / "results"
+BENCHMARK_RESULT_DIR = Path(os.environ.get("DIFFUSION_BENCHMARK_DIR", str(_DEFAULT_RESULT_DIR)))
 
 BENCHMARK_SCRIPT = str(
     Path(__file__).parent.parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
@@ -297,7 +301,8 @@ def run_benchmark(
     at 50 ms intervals across all visible devices for the duration of the run.
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    result_file = Path(tempfile.gettempdir()) / f"diffusion_perf_{test_name}_{timestamp}.json"
+    BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    result_file = BENCHMARK_RESULT_DIR / f"diffusion_perf_{test_name}_{timestamp}.json"
 
     exclude_keys = {"baseline", "dataset", "task"}
 
@@ -421,6 +426,12 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
     ):
         if key in result:
             print(f"  {key}: {result[key]:.4f}")
+    # List all saved result files for this test
+    saved = sorted(BENCHMARK_RESULT_DIR.glob(f"diffusion_perf_{test_name}_*.json"))
+    if saved:
+        print(f"\n  Result files saved to: {BENCHMARK_RESULT_DIR}")
+        for f in saved:
+            print(f"    {f.name}")
     print(f"{'=' * 60}")
 
     assert_result(result, params)
