@@ -26,15 +26,14 @@ os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "0"
 
 # Results directory: override via DIFFUSION_BENCHMARK_DIR env var.
-# Defaults to tests/perf/diffusion/results/ inside the repo.
 _DEFAULT_RESULT_DIR = Path(__file__).parent.parent / "results"
 BENCHMARK_RESULT_DIR = Path(os.environ.get("DIFFUSION_BENCHMARK_DIR", str(_DEFAULT_RESULT_DIR)))
 
 BENCHMARK_SCRIPT = str(
-    Path(__file__).parent.parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
+    Path(__file__).parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
 )
 
-CONFIG_FILE_PATH = str(Path(__file__).parent.parent / "tests" / "test.json")
+CONFIG_FILE_PATH = str(Path(__file__).parent.parent / "tests" / "test_qwen_image.json")
 
 
 def load_configs(config_path: str) -> list[dict[str, Any]]:
@@ -101,7 +100,7 @@ class DiffusionServer:
         self.proc = subprocess.Popen(
             cmd,
             env=env,
-            cwd=str(Path(__file__).parent.parent.parent.parent.parent),
+            cwd=str(Path(__file__).parent.parent.parent.parent),
         )
 
         max_wait = 1200  # 20 minutes for model loading
@@ -316,7 +315,7 @@ def run_benchmark(
         text=True,
         bufsize=1,
         universal_newlines=True,
-        cwd=str(Path(__file__).parent.parent.parent.parent.parent),
+        cwd=str(Path(__file__).parent.parent.parent.parent),
     )
     for line in iter(process.stdout.readline, ""):
         print(line, end="")
