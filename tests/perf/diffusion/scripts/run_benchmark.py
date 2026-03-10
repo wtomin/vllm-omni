@@ -21,9 +21,6 @@ from typing import Any
 
 import psutil
 import pytest
-import torch
-
-from tests.utils import GPUMemoryMonitor
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "0"
@@ -265,28 +262,6 @@ def benchmark_params(request, diffusion_server):
     return {"test_name": test_name, "params": params_list[param_index]}
 
 
-def _start_gpu_monitors(interval: float = 0.05) -> list[GPUMemoryMonitor]:
-    """Start one GPUMemoryMonitor per visible GPU and return the list."""
-    n = torch.cuda.device_count()
-    monitors = [GPUMemoryMonitor(device_index=i, interval=interval) for i in range(n)]
-    for m in monitors:
-        m.start()
-    return monitors
-
-
-def _stop_gpu_monitors(monitors: list[GPUMemoryMonitor]) -> dict[str, float]:
-    """Stop all monitors and return aggregated peak/mean memory in MB."""
-    for m in monitors:
-        m.stop()
-    if not monitors:
-        return {"peak_memory_mb_max": 0.0, "peak_memory_mb_mean": 0.0}
-    peaks = [m.peak_used_mb for m in monitors]
-    return {
-        "peak_memory_mb_max": sum(peaks),
-        "peak_memory_mb_mean": sum(peaks) / len(peaks),
-    }
-
-
 def run_benchmark(
     host: str,
     port: int,
@@ -294,12 +269,7 @@ def run_benchmark(
     params: dict[str, Any],
     test_name: str,
 ) -> dict[str, Any]:
-    """Run diffusion_benchmark_serving.py as a subprocess and return parsed metrics.
-
-    GPU memory (peak_memory_mb_max / peak_memory_mb_mean) is measured by
-    GPUMemoryMonitor from tests.utils, which polls torch.cuda.mem_get_info()
-    at 50 ms intervals across all visible devices for the duration of the run.
-    """
+    """Run diffusion_benchmark_serving.py as a subprocess and return parsed metrics."""
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
     result_file = BENCHMARK_RESULT_DIR / f"diffusion_perf_{test_name}_{timestamp}.json"
@@ -339,24 +309,20 @@ def run_benchmark(
 
     print(f"\nRunning benchmark: {' '.join(cmd)}")
 
-    monitors = _start_gpu_monitors()
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True,
-            cwd=str(Path(__file__).parent.parent.parent.parent.parent),
-        )
-        for line in iter(process.stdout.readline, ""):
-            print(line, end="")
-        for line in iter(process.stderr.readline, ""):
-            print(line, end="")
-        process.wait()
-    finally:
-        memory_metrics = _stop_gpu_monitors(monitors)
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+        cwd=str(Path(__file__).parent.parent.parent.parent.parent),
+    )
+    for line in iter(process.stdout.readline, ""):
+        print(line, end="")
+    for line in iter(process.stderr.readline, ""):
+        print(line, end="")
+    process.wait()
 
     if process.returncode != 0:
         raise RuntimeError(f"Benchmark script exited with code {process.returncode}")
@@ -365,15 +331,7 @@ def run_benchmark(
         raise FileNotFoundError(f"Benchmark result file not found: {result_file}")
 
     with open(result_file, encoding="utf-8") as f:
-        result = json.load(f)
-
-    # Inject GPU memory metrics collected by the monitor.
-    result.update(memory_metrics)
-    # overwrite the result file
-    with open(result_file, "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=4)
-
-    return result
+        return json.load(f)
 
 
 def assert_result(result: dict[str, Any], params: dict[str, Any]) -> None:
@@ -404,7 +362,6 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
     Tracked metrics:
         - throughput_qps (higher is better)
         - latency_p50, latency_p99 (lower is better)
-        - peak_memory_mb_max, peak_memory_mb_mean (lower is better)
     """
     test_name = benchmark_params["test_name"]
     params = benchmark_params["params"]
@@ -425,8 +382,6 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
         "latency_median",
         "latency_p50",
         "latency_p99",
-        "peak_memory_mb_max",
-        "peak_memory_mb_mean",
     ):
         if key in result:
             print(f"  {key}: {result[key]:.4f}")
