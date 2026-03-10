@@ -1,0 +1,208 @@
+[
+    {
+        "test_name": "test_wan22_t2v_baseline",
+        "description": "Wan2.2 T2V baseline — no sequence/cfg parallelism",
+        "server_params": {
+            "model": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            "serve_args": {
+                "boundary-ratio": 0.875,
+                "flow-shift": 5.0
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2v",
+                "height": 480,
+                "width": 640,
+                "fps": 16,
+                "num-frames": 80,
+                "num-inference-steps": 40,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "guidance-scale": 4.0,
+                "negative-prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 3000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_wan22_t2v_cfg2_ulysses2",
+        "description": "Wan2.2 T2V default config — CFG-parallel=2 + Ulysses SP=2 (4 GPUs)",
+        "server_params": {
+            "model": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            "serve_args": {
+                "cfg-parallel-size": 2,
+                "ulysses-degree": 2,
+                "boundary-ratio": 0.875,
+                "flow-shift": 5.0
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2v",
+                "height": 480,
+                "width": 640,
+                "fps": 16,
+                "num-frames": 80,
+                "num-inference-steps": 40,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "guidance-scale": 4.0,
+                "negative-prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 3000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_wan22_t2v_cfg2_ulysses2_cache_dit",
+        "description": "Wan2.2 T2V default config + CacheDiT acceleration (CFG-parallel=2 + Ulysses SP=2, 4 GPUs)",
+        "server_params": {
+            "model": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            "serve_args": {
+                "cfg-parallel-size": 2,
+                "ulysses-degree": 2,
+                "boundary-ratio": 0.875,
+                "flow-shift": 5.0,
+                "cache-backend": "cache_dit"
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2v",
+                "height": 480,
+                "width": 640,
+                "fps": 16,
+                "num-frames": 80,
+                "num-inference-steps": 40,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "guidance-scale": 4.0,
+                "negative-prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 3000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_wan22_t2v_cfg2_ulysses2_fp8",
+        "description": "Wan2.2 T2V default config + FP8 quantization (CFG-parallel=2 + Ulysses SP=2, 4 GPUs)",
+        "server_params": {
+            "model": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            "serve_args": {
+                "cfg-parallel-size": 2,
+                "ulysses-degree": 2,
+                "boundary-ratio": 0.875,
+                "flow-shift": 5.0,
+                "quantization-config": {"method": "fp8"}
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2v",
+                "height": 480,
+                "width": 640,
+                "fps": 16,
+                "num-frames": 80,
+                "num-inference-steps": 40,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "guidance-scale": 4.0,
+                "negative-prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 3000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_wan22_t2v_cfg2_ulysses2_tp2",
+        "description": "Wan2.2 T2V default config + Tensor Parallel=2 (CFG-parallel=2 + Ulysses SP=2 + TP=2, 8 GPUs)",
+        "server_params": {
+            "model": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            "serve_args": {
+                "cfg-parallel-size": 2,
+                "ulysses-degree": 2,
+                "tensor-parallel-size": 2,
+                "boundary-ratio": 0.875,
+                "flow-shift": 5.0
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2v",
+                "height": 480,
+                "width": 640,
+                "fps": 16,
+                "num-frames": 80,
+                "num-inference-steps": 40,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "guidance-scale": 4.0,
+                "negative-prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 3000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_wan22_t2v_cfg2_ulysses2_hsdp",
+        "description": "Wan2.2 T2V default config + HSDP weight sharding (CFG-parallel=2 + Ulysses SP=2 + HSDP, 4 GPUs)",
+        "server_params": {
+            "model": "Wan-AI/Wan2.2-T2V-A14B-Diffusers",
+            "serve_args": {
+                "cfg-parallel-size": 2,
+                "ulysses-degree": 2,
+                "boundary-ratio": 0.875,
+                "flow-shift": 5.0,
+                "use-hsdp": true
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2v",
+                "height": 480,
+                "width": 640,
+                "fps": 16,
+                "num-frames": 80,
+                "num-inference-steps": 40,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "guidance-scale": 4.0,
+                "negative-prompt": "色调艳丽，过曝，静态，细节模糊不清，字幕，风格，作品，画作，画面，静止，整体发灰，最差质量，低质量，JPEG压缩残留，丑陋的，残缺的，多余的手指，画得不好的手部，画得不好的脸部，畸形的，毁容的，形态畸形的肢体，手指融合，静止不动的画面，杂乱的背景，三条腿，背景人很多，倒着走",
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 3000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    }
+]
