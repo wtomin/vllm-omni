@@ -526,6 +526,14 @@ class RandomDataset(BaseDataset):
         return self.num_prompts
 
     def __getitem__(self, idx: int) -> RequestFuncInput:
+        extra_body: dict[str, Any] = {}
+        if getattr(self.args, "negative_prompt", None):
+            extra_body["negative_prompt"] = self.args.negative_prompt
+        if getattr(self.args, "guidance_scale", None) is not None:
+            extra_body["guidance_scale"] = self.args.guidance_scale
+        if getattr(self.args, "cfg_scale", None) is not None:
+            extra_body["cfg_scale"] = self.args.cfg_scale
+
         return RequestFuncInput(
             prompt=f"Random prompt {idx} for benchmarking diffusion models",
             api_url=self.api_url,
@@ -536,6 +544,7 @@ class RandomDataset(BaseDataset):
             num_inference_steps=self.args.num_inference_steps,
             seed=self.args.seed,
             fps=self.args.fps,
+            extra_body=extra_body,
         )
 
     def get_requests(self) -> list[RequestFuncInput]:
@@ -955,6 +964,27 @@ if __name__ == "__main__":
         help="Random seed (for diffusion models).",
     )
     parser.add_argument("--fps", type=int, default=None, help="FPS (for video).")
+    parser.add_argument(
+        "--negative-prompt",
+        type=str,
+        default=None,
+        dest="negative_prompt",
+        help="Negative prompt passed as extra_body.negative_prompt in every request.",
+    )
+    parser.add_argument(
+        "--guidance-scale",
+        type=float,
+        default=None,
+        dest="guidance_scale",
+        help="Classifier-free guidance scale passed as extra_body.guidance_scale.",
+    )
+    parser.add_argument(
+        "--cfg-scale",
+        type=float,
+        default=None,
+        dest="cfg_scale",
+        help="True CFG scale specific to Qwen-Image, passed as extra_body.cfg_scale (e.g. 4.0).",
+    )
     parser.add_argument("--output-file", type=str, default=None, help="Output JSON file for metrics.")
     parser.add_argument(
         "--slo",
