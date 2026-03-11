@@ -199,7 +199,7 @@ def test_zimage_tensor_parallel_tp2(tmp_path: Path):
 
     mean_abs_diff, p99_abs_diff = _diff_metrics(tp1_img, tp2_img)
     mean_threshold = 3e-2
-    p99_threshold = 5e-1
+    p99_threshold = 2.5e-1
     print(
         "Z-Image TP image diff stats (TP=1 vs TP=2): "
         f"mean_abs_diff={mean_abs_diff:.6e}, p99_abs_diff={p99_abs_diff:.6e}; "
