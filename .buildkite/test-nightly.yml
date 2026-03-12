@@ -232,20 +232,3 @@ steps:
                 hostPath:
                   path: /mnt/hf-cache
                   type: DirectoryOrCreate
-
-  - label: ":email: Qwen-Image Diffusion Perf Collection & Email"
-    key: nightly-qwen-image-perf-distribution
-    depends_on: nightly-qwen-image-performance
-    if: build.env("NIGHTLY") == "1"
-    commands:
-      - pip install openpyxl
-      - export DIFFUSION_BENCHMARK_DIR=tests/perf/results
-      - export DEFAULT_OUTPUT_DIR=tests
-      - export EMAIL_SUBJECT_PREFIX="[Qwen-Image Diffusion]"
-      - mkdir -p tests/perf/results
-      - buildkite-agent artifact download "tests/perf/results/diffusion_perf_*.json" . --step nightly-qwen-image-performance
-      - python tools/nightly/generate_diffusion_nightly_perf_excel.py
-      - python tools/nightly/send_nightly_perf_email.py --report-file tests
-      - buildkite-agent artifact upload "tests/qwen_image_perf_*.xlsx"
-    agents:
-      queue: "cpu_queue_premerge"
