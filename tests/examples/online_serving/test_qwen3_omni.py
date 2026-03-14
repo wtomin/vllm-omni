@@ -5,6 +5,8 @@ See examples/online_serving/qwen3_omni/README.md
 
 import os
 
+from vllm_omni.platforms import current_omni_platform
+
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
 from pathlib import Path
@@ -21,6 +23,10 @@ models = ["Qwen/Qwen3-Omni-30B-A3B-Instruct"]
 
 
 stage_configs = [str(Path(__file__).parent.parent.parent / "e2e" / "stage_configs" / "qwen3_omni_ci.yaml")]
+
+if current_omni_platform.is_xpu():
+    stage_configs = [str(Path(__file__).parent.parent.parent / "e2e" / "stage_configs" / "xpu" / "qwen3_omni_ci.yaml")]
+
 
 example_dir = str(Path(__file__).parent.parent.parent.parent / "examples" / "online_serving" / "qwen3_omni")
 # Create parameter combinations for model and stage config
