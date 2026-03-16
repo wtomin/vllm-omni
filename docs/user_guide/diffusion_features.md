@@ -73,7 +73,7 @@ Extension methods add specialized capabilities to diffusion models beyond standa
 ## Supported Models
 
 The following tables show which models support each acceleration method:
-- **Sequence Parallel**: Includes both Ulysses-SP and Ring-Attention methods
+- **🔀SP (Ulysses & Ring)**: Includes both Ulysses-SP and Ring-Attention methods
 - ✅ = Fully supported
 - ❌ = Not supported
 
@@ -82,36 +82,44 @@ The following tables show which models support each acceleration method:
 
 ### ImageGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | HSDP | Expert Parallel | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel | FP8-Quantization |
-|-------|------------------|:----------:|:-----------:|:-----------------:|:------------:|:---------------:|:----:|:---------------:|:-----------------------:|:-----------:|:------------------:|:----------------:|
-| **Bagel** | `ByteDance-Seed/BAGEL-7B-MoT` | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **FLUX.1-dev** | `black-forest-labs/FLUX.1-dev` | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **FLUX.2-klein** | `black-forest-labs/FLUX.2-klein-4B` | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **GLM-Image** | `THUDM/glm-4-vision` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **LongCat-Image** | `meituan-longcat/LongCat-Image` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **LongCat-Image-Edit** | `meituan-longcat/LongCat-Image-Edit` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Ovis-Image** | `OvisAI/Ovis-Image` | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Qwen-Image** | `Qwen/Qwen-Image` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
-| **Qwen-Image-2512** | `Qwen/Qwen-Image-2512` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
-| **Qwen-Image-Edit** | `Qwen/Qwen-Image-Edit` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
-| **Qwen-Image-Edit-2509** | `Qwen/Qwen-Image-Edit-2509` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
-| **Qwen-Image-Layered** | `Qwen/Qwen-Image-Layered` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
-| **Stable-Diffusion3.5** | `stabilityai/stable-diffusion-3.5` | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ | ✅ | ✅ | ❌ | ✅ (TP=2 only) | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| Model | Model Identifier | ⚡TeaCache | ⚡Cache-DiT | 🔀SP (Ulysses & Ring) | 🔀CFG-Parallel | 🔀Tensor-Parallel | 🔀HSDP | 💾CPU Offload (Layerwise) | 💾VAE-Patch-Parallel | 💾FP8-Quantization | 💾GGUF-Quantization |
+|-------|------------------|:----------:|:-----------:|:---------------------:|:--------------:|:-----------------:|:------:|:------------------------:|:--------------------:|:-----------------:|:-------------------:|
+| **Bagel** | `ByteDance-Seed/BAGEL-7B-MoT` | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **FLUX.1-dev** | `black-forest-labs/FLUX.1-dev` | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ |
+| **FLUX.2-klein** | `black-forest-labs/FLUX.2-klein-4B` | ❌ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ |
+| **FLUX.2-dev** | `black-forest-labs/FLUX.2-dev` | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **GLM-Image** | `zai-org/GLM-Image` | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **HunyuanImage3** | `tencent/HunyuanImage-3.0` | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **LongCat-Image** | `meituan-longcat/LongCat-Image` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **LongCat-Image-Edit** | `meituan-longcat/LongCat-Image-Edit` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **MammothModa2** | `bytedance-research/MammothModa2-Preview` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Nextstep_1** | `stepfun-ai/NextStep-1.1` | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **OmniGen2** | `OmniGen2/OmniGen2` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Ovis-Image** | `OvisAI/Ovis-Image` | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Qwen-Image** | `Qwen/Qwen-Image` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **Qwen-Image-2512** | `Qwen/Qwen-Image-2512` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ✅ | ❌ |
+| **Qwen-Image-Edit** | `Qwen/Qwen-Image-Edit` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Qwen-Image-Edit-2509** | `Qwen/Qwen-Image-Edit-2509` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Qwen-Image-Layered** | `Qwen/Qwen-Image-Layered` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Stable-Diffusion3.5** | `stabilityai/stable-diffusion-3.5` | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ | ✅ | ✅ | ❌ | ✅ (TP=2 only) | ❌ | ❌ | ✅ | ✅ | ✅ |
 
 ### VideoGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | HSDP | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel |
-|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:----:|:-----------------------:|:-----------:|:------------------:|
-| **Wan2.2-T2V** | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Wan2.2-I2V** | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Wan2.2-TI2V** | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| Model | Model Identifier | ⚡TeaCache | ⚡Cache-DiT | 🔀SP (Ulysses & Ring) | 🔀CFG-Parallel | 🔀Tensor-Parallel | 🔀HSDP | 💾CPU Offload (Layerwise) | 💾VAE-Patch-Parallel | 💾FP8-Quantization | 💾GGUF-Quantization |
+|-------|------------------|:----------:|:-----------:|:---------------------:|:--------------:|:-----------------:|:------:|:------------------------:|:--------------------:|:-----------------:|:-------------------:|
+| **Wan2.2-T2V** | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **Wan2.2-I2V** | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **Wan2.2-TI2V** | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **LTX-2** | `Lightricks/LTX-2` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **Helios** | `BestWishYsh/Helios-Base` | ❌ | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| **DreamID-Omni** | `XuGuo699/DreamID-Omni` | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 ### AudioGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel |
-|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:-----------------------:|:-----------:|:------------------:|
-| **Stable-Audio-Open** | `stabilityai/stable-audio-open-1.0` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Model | Model Identifier | ⚡TeaCache | ⚡Cache-DiT | 🔀SP (Ulysses & Ring) | 🔀CFG-Parallel | 🔀Tensor-Parallel | 🔀HSDP | 💾CPU Offload (Layerwise) | 💾VAE-Patch-Parallel | 💾FP8-Quantization | 💾GGUF-Quantization |
+|-------|------------------|:----------:|:-----------:|:---------------------:|:--------------:|:-----------------:|:------:|:------------------------:|:--------------------:|:-----------------:|:-------------------:|
+| **Stable-Audio-Open** | `stabilityai/stable-audio-open-1.0` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 
 
 ## Feature Compatibility
@@ -119,24 +127,29 @@ The following tables show which models support each acceleration method:
 **Legend:**
 - ✅: Fully supported and tested
 - ❌: No support plan
-- ❓: Not verified yet, help wanted!
+- 🙋: Not verified yet, help wanted!
 
-|                        | TeaCache | Cache-DiT | Ulysses-SP | Ring-Attn | Tensor Parallel | CFG-Parallel | HSDP | Expert Parallel | LoRA Inference | CPU Offloading | FP8 Quant | VAE Patch Parallel |
-|------------------------|:--------:|:---------:|:----------:|:---------:|:---------------:|:------------:|:----:|:---------------:|:--------------:|:--------------:|:---------:|:------------------:|
-| **TeaCache**           |          |           |            |           |                 |              |      |                 |                |                |           |                    |
-| **Cache-DiT**          |    ❌    |           |            |           |                 |              |      |                 |                |                |           |                    |
-| **Ulysses-SP**         |    ❓    |    ❓     |            |           |                 |              |      |                 |                |                |           |                    |
-| **Ring-Attn**          |    ❓    |    ❓     |     ✅     |           |                 |              |      |                 |                |                |           |                    |
-| **Tensor Parallel**    |    ❓    |    ❓     |     ❓     |    ❓     |                 |              |      |                 |                |                |           |                    |
-| **CFG-Parallel**       |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |              |      |                 |                |                |           |                    |
-| **HSDP**               |    ❓    |    ❓     |     ✅     |    ✅     |       ❌        |      ✅      |      |                 |                |                |           |                    |
-| **Expert Parallel**    |    ❓    |    ❓     |     ❓     |    ❓     |       ✅        |      ❓      |  ❓  |                 |                |                |           |                    |
-| **LoRA Inference**     |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |                |                |           |                    |
-| **CPU Offloading**     |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |       ❓       |                |           |                    |
-| **FP8 Quant**          |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |       ❓       |       ❓       |           |                    |
-| **VAE Patch Parallel** |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |       ❓       |       ❓       |     ❓    |                    |
+|  | ⚡TeaCache | ⚡Cache-DiT | 🔀Ulysses-SP | 🔀Ring-Attn | 🔀CFG-Parallel | 🔀Tensor Parallel | 🔀HSDP | 💾CPU Offloading (Layerwise) | 💾VAE Patch Parallel | 💾FP8 Quant | 💾GGUF Quant | 🔧LoRA Inference |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **⚡TeaCache** | | | | | | | | | | | | |
+| **⚡Cache-DiT** | ❌ | | | | | | | | | | | |
+| **🔀Ulysses-SP** | 🙋 | 🙋 | | | | | | | | | | |
+| **🔀Ring-Attn** | 🙋 | 🙋 | ✅ | | | | | | | | | |
+| **🔀CFG-Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | | | | | | | | |
+| **🔀Tensor Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | | | | | | | |
+| **🔀HSDP** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | | | | | |
+| **💾CPU Offloading (Layerwise)** | 🙋 | 🙋 | ❌ | ❌ | ❌ | ❌ | ❌ | | | | | |
+| **💾VAE Patch Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | | | |
+| **💾FP8 Quant** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | | | |
+| **💾GGUF Quant** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | |
+| **🔧LoRA Inference** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | |
 
-**Note:** The table shows cross-compatibility between features. If you'd like to help verify untested combinations, please contribute test results to the project!
+> Notes:
+> 1. Tensor Parallel and HSDP are not compatible.
+> 2. TeaCache and Cache-DiT are not compatible.
+> 3. CPU Offloading (Layerwise) and CPU Offloading (Module-wise) are not compatible.
+> 4. FP8 Quantization and GGUF Quantization are not compatible.
+> 5. CPU Offloading (Layerwise) supports single-card for now.
 
 
 ## Learn More
