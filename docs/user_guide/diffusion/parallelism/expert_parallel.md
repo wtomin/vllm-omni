@@ -17,7 +17,7 @@ Unlike Tensor Parallelism which shards every layer's weights, Expert Parallelism
 
 During the forward pass, a gating mechanism routes tokens to their designated experts, requiring all-to-all communication to dispatch tokens to the correct ranks and combine results.
 
-See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+See supported models list in [Supported Models](../../diffusion_features.md#supported-models).
 
 !!! note "EP Size Constraint"
     The effective EP size equals `tp × sp × cfg × dp`. At least one of TP/SP/CFG/DP must be set when EP is enabled.

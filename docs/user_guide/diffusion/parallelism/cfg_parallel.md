@@ -17,7 +17,7 @@
 
 CFG-Parallel accelerates diffusion models by distributing positive and negative classifier-free guidance (CFG) passes across different GPUs, providing ~1.8x speedup when CFG is enabled. It's ideal for image editing tasks that require guidance scales greater than 1.0.
 
-See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+See supported models list in [Supported Models](../../diffusion_features.md#supported-models).
 
 ---
 
@@ -112,7 +112,7 @@ In `DiffusionParallelConfig`
 **Not for:**
 
 - Single GPU setups
-- Models that don't support CFG-Parallel (check [supported models](../diffusion_features.md#supported-models))
+- Models that don't support CFG-Parallel (check [supported models](../../diffusion_features.md#supported-models))
 - Workloads without negative prompts or classifier-free guidance
 - Very short inference runs (< 10 steps) where parallelism overhead may outweigh benefits
 
@@ -157,7 +157,7 @@ outputs = omni.generate(
 ```
 
 3. **Check model support:**
-   - Verify your model in [supported models](../diffusion_features.md#supported-models)
+   - Verify your model in [supported models](../../diffusion_features.md#supported-models)
    - Some models don't support CFG-Parallel
 
 ---
@@ -166,4 +166,4 @@ outputs = omni.generate(
 
 1. ✅ **Enable CFG-Parallel** - Set `cfg_parallel_size=2` in `DiffusionParallelConfig` to get speedup when using CFG
 2. ✅ **Set CFG Scale** - Ensure `true_cfg_scale > 1.0` in `OmniDiffusionSamplingParams` for CFG-Parallel to take effect
-3. ✅ **Check Model Support** - Verify your model supports CFG-Parallel in [supported models](../diffusion_features.md#supported-models)
+3. ✅ **Check Model Support** - Verify your model supports CFG-Parallel in [supported models](../../diffusion_features.md#supported-models)

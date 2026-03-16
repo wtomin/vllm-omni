@@ -22,7 +22,7 @@ This is particularly useful for:
 - **Memory-constrained environments** where the VAE decode activation peak exceeds available VRAM
 - **Multi-GPU setups** where you want to leverage distributed resources for the VAE stage
 
-See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+See supported models list in [Supported Models](../../diffusion_features.md#supported-models).
 
 
 VAE Patch Parallelism uses two strategies based on image size:
@@ -167,7 +167,7 @@ if vae_pp_size > 1 and not is_distributed_vae:
 
 **Solutions**:
 
-1. **Use a supported model** (recommended): check [Supported Models](../diffusion_features.md#supported-models) for the VAE-Patch-Parallel column.
+1. **Use a supported model** (recommended): check [Supported Models](../../diffusion_features.md#supported-models) for the VAE-Patch-Parallel column.
 
 2. To add support for a new model, implement `DistributedVaeMixin` on its VAE class (contributions are welcome).
 
@@ -198,4 +198,4 @@ _sequence_parallel_size = ulysses_degree × ring_degree_
 1. ✅ **Enable VAE Patch Parallelism** - Set `vae_patch_parallel_size`， `vae_use_tiling=True` in `DiffusionParallelConfig` to reduce VAE decode peak memory
 2. ✅ **Use Long Sequence** - VAE patch parallelism benefits are most apparent at long sequence decoding
 3. ✅ **Combine with other parallelism methods** - Suggest to use together with Tensor Parallel or CFG-Parallel for maximum memory savings
-4. ⚠️ **Check Model Support** - Verify in [supported models](../diffusion_features.md#supported-models) or `vllm_omni/diffusion/registry.py`
+4. ⚠️ **Check Model Support** - Verify in [supported models](../../diffusion_features.md#supported-models) or `vllm_omni/diffusion/registry.py`
