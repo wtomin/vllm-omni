@@ -16,7 +16,7 @@
 
 Sequence parallelism splits the input along the sequence dimension across multiple GPUs, allowing each device to process only a portion of the sequence. vLLM-Omni provides 1.5x-3.6x speedup for large images and videos using DeepSpeed Ulysses, Ring-Attention, or hybrid approaches. Use sequence parallelism when generating high-resolution images/videos that don't fit on a single GPU or require faster inference.
 
-See supported models list in [Diffusion Features - Supported Models](../diffusion_features.md#supported-models).
+See supported models list in [Diffusion Features - Supported Models](../../diffusion_features.md#supported-models).
 
 **Supported Methods:**
 

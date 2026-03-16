@@ -17,7 +17,7 @@
 
 Tensor Parallelism (TP) shards some model weights across multiple GPUs, usually the Linear layers. This enables running large models that don't fit on a single GPU. It's essential for memory-constrained setups or very large models.
 
-See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+See supported models list in [Supported Models](../../diffusion_features.md#supported-models).
 
 !!! note "TP Limitations for Diffusion Models"
     We currently implement Tensor Parallelism (TP) only for the DiT (Diffusion Transformer) blocks. This is because the `text_encoder` component in vLLM-Omni uses the original Transformers implementation, which does not yet support TP.
@@ -139,7 +139,7 @@ parallel_config=DiffusionParallelConfig(tensor_parallel_size=4)
 **Solutions**:
 1. Check model-specific constraints (e.g., Z-Image only supports TP=2)
 2. Use a smaller TP size that divides model dimensions
-3. Consult [Supported Models](../diffusion_features.md#supported-models) for compatible TP sizes
+3. Consult [Supported Models](../../diffusion_features.md#supported-models) for compatible TP sizes
 
 
 ---

@@ -23,7 +23,7 @@ Cache-DiT accelerates diffusion transformer models through intelligent caching m
 - **TaylorSeer**: Taylor expansion-based forecasting for faster inference
 - **SCM**: Step Computation Masking for selective step computation
 
-See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+See supported models list in [Supported Models](../../diffusion_features.md#supported-models).
 
 ---
 

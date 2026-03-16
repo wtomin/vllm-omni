@@ -13,4 +13,4 @@ This guide covers the parallelism methods in vLLM-Omni for speeding up diffusion
 | **[HSDP](hsdp.md)** | Shards full model weights via PyTorch FSDP2 to enable large-model inference on memory-constrained GPUs |
 | **[Expert Parallelism](expert_parallel.md)** | Shards MoE expert blocks across GPUs for MoE models (e.g. HunyuanImage3.0) |
 
-See [Supported Models](../diffusion_features.md#supported-models) for per-model compatibility.
+See [Supported Models](../../diffusion_features.md#supported-models) for per-model compatibility.
