@@ -49,7 +49,7 @@ class ReadmeSnippet(NamedTuple):
 
     @property
     def test_id(self) -> str:
-        return f"{ReadmeSnippet._slug(self.h2_title)}_  {self.index_in_section:03d}"
+        return f"{ReadmeSnippet._slug(self.h2_title)}_{self.index_in_section:03d}"
 
     @staticmethod
     def extract_readme_snippets(readme_path: Path) -> list["ReadmeSnippet"]:
