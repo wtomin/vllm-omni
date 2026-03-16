@@ -1,45 +1,67 @@
-# Diffusion Acceleration Overview
+# Diffusion Advanced Features
 
-vLLM-Omni supports various acceleration methods to speed up diffusion model inference with minimal quality degradation. These include **cache methods** that intelligently cache intermediate computations to avoid redundant work across diffusion timesteps, **parallelism methods** that distribute the computation across multiple devices, and **quantization methods** that reduce memory footprint while preserving accuracy.
+## Table of Contents
 
-## Supported Acceleration Methods
+- [Overview](#overview)
+- [Supported Features](#supported-features)
+- [Supported Models](#supported-models)
+- [Feature Compatibility](#feature-compatibility)
+- [Learn More](#learn-more)
 
-vLLM-Omni currently supports two main cache acceleration backends:
+## Overview
 
-1. **[TeaCache](diffusion/teacache.md)** - Hook-based adaptive caching that caches transformer computations when consecutive timesteps are similar
-2. **[Cache-DiT](diffusion/cache_dit_acceleration.md)** - Library-based acceleration using multiple techniques:
-    - **DBCache** (Dual Block Cache): Caches intermediate transformer block outputs based on residual differences
-    - **TaylorSeer**: Uses Taylor expansion-based forecasting for faster inference
-    - **SCM** (Step Computation Masking): Selectively computes steps based on adaptive masking
+vLLM-Omni supports various advanced features for diffusion models:
+- Acceleration: **cache methods**, **parallelism methods**
+- Memory optimization: **cpu offloading**, **quantization**
+- Extensions: **LoRA inference**
 
-Both methods can provide significant speedups (typically **1.5x-2.0x**) while maintaining high output quality.
+## Supported Features
 
-vLLM-Omni also supports quantization methods:
+### Acceleration
 
-3. **[Quantization](diffusion/quantization/overview.md)** - Reduces DiT linear layers from BF16 to FP8 or Int8, providing ~1.28x speedup with minimal quality loss. Supports per-layer skip for sensitive layers.
+#### Lossy Acceleration
 
-vLLM-Omni also supports parallelism methods for diffusion models, including:
+Cache methods trade minimal quality for significant speedup. Quality loss is typically imperceptible with proper tuning.
 
-1. [Ulysses-SP](diffusion/parallelism_acceleration.md#ulysses-sp) - splits the input along the sequence dimension and uses all-to-all communication to allow each device to compute only a subset of attention heads.
+| Method | Description | Best For |
+|--------|-------------|----------|
+| **[TeaCache](diffusion/cache_acceleration/teacache.md)** | Adaptive caching using modulated inputs | Quick setup, balanced quality/speed on single GPU |
+| **[Cache-DiT](diffusion/cache_acceleration/cache_dit.md)** | Multiple caching techniques: DBCache, TaylorSeer, SCM | Fine-grained control, tunable quality-speed tradeoff |
 
-2. [Ring-Attention](diffusion/parallelism_acceleration.md#ring-attention) - splits the input along the sequence dimension and uses ring-based P2P communication to accumulate attention results, keeping the sequence dimension sharded.
 
-3. [CFG-Parallel](diffusion/parallelism_acceleration.md#cfg-parallel) - runs the positive/negative prompts of classifier-free guidance (CFG) on different devices, then merges on a single device to perform the scheduler step.
+#### Lossless Acceleration
 
-4. [Tensor Parallelism](diffusion/parallelism_acceleration.md#tensor-parallelism) - shards DiT weights across devices to reduce per-GPU memory usage.
+Parallelism methods distribute computation across GPUs without quality loss (mathematically equivalent to single-GPU).
 
-5. [VAE Patch Parallelism](diffusion/parallelism_acceleration.md#vae-patch-parallelism) - shards VAE decode/encode spatially across ranks to reduce VAE peak memory (and can speed up VAE decode).
+| Method | Description | Best For |
+|--------|-------------|----------|
+| **[Ulysses-SP](diffusion/parallelism/sequence_parallel.md)** | Sequence parallelism via all-to-all communication | High-resolution images (>1536px) or long videos with 2-8 GPUs |
+| **[Ring-Attention](diffusion/parallelism/sequence_parallel.md)** | Sequence parallelism via ring-based communication | Videos, very long sequences, memory-constrained, with 2-8 GPUs |
+| **[CFG-Parallel](diffusion/parallelism/cfg_parallel.md)** | Splits CFG positive/negative branches across devices | Image editing with CFG guidance (true_cfg_scale > 1) on 2 GPUs |
+| **[Tensor Parallelism](diffusion/parallelism/tensor_parallel.md)** | Shards model weights across devices | Large models that don't fit in single GPU, with 2+ GPUs |
+| **[HSDP](diffusion/parallelism/hsdp.md)** | Weight sharding via FSDP2, redistributed on-demand at runtime | Very large models (14B+) on limited VRAM, combinable with SP |
+| **[Expert Parallelism](diffusion/parallelism/expert_parallel.md)** | Shards MoE expert MLP blocks across devices | MoE diffusion models (e.g., HunyuanImage3.0) |
 
-6. [HSDP](diffusion/parallelism_acceleration.md#hsdp) - Hybrid Sharded Data Parallel shards model weights across GPUs to reduce per-GPU memory usage, enabling inference of large models on limited GPU memory.
+**Note:** Some acceleration methods can be combined together for optimized performance. See [Feature Compatibility](feature_compatibility.md) for detailed configuration examples.
 
-## Quick Comparison
+### Memory Optimization
 
-### Cache Methods
+Memory optimization methods help reduce GPU memory usage, enabling inference on resource-constrained hardware or larger models.
 
-| Method | Configuration | Description | Best For |
-|--------|--------------|-------------|----------|
-| **TeaCache** | `cache_backend="tea_cache"` | Simple, adaptive caching with minimal configuration | Quick setup, balanced speed/quality |
-| **Cache-DiT** | `cache_backend="cache_dit"` | Advanced caching with multiple techniques (DBCache, TaylorSeer, SCM) | Maximum acceleration, fine-grained control |
+| Method | Description | Best For |
+|--------|-------------|----------|
+| **[CPU Offload](diffusion/cpu_offload_diffusion.md)** | Offloads model components to CPU memory | Limited VRAM, large models on consumer GPUs |
+| **[FP8 Quantization](diffusion/quantization/overview.md)** | Reduces DiT linear layers from BF16 to FP8 | Limited VRAM, accuracy preserved    |
+| **[VAE Patch Parallelism](diffusion/parallelism/vae_patch_parallel.md)** | Distributes VAE decode tiling across GPUs | High-resolution generation with reduced VAE memory peak |
+
+### Extensions
+
+Extension methods add specialized capabilities to diffusion models beyond standard inference.
+
+| Method | Description | Best For |
+|--------|-------------|----------|
+| **[LoRA Inference](diffusion/lora.md)** | Enables inference with Low-Rank Adaptation (LoRA) adapters weights | Reinforcement learning extensions |
+
 
 ### Quantization Methods
 
@@ -50,323 +72,93 @@ vLLM-Omni also supports parallelism methods for diffusion models, including:
 
 ## Supported Models
 
-The following table shows which models are currently supported by each acceleration method:
+The following tables show which models support each acceleration method:
+- **Sequence Parallel**: Includes both Ulysses-SP and Ring-Attention methods
+- ✅ = Fully supported
+- ❌ = Not supported
+
+> Note:
+  CPU Offload has two methods: Model-level (default for models with DiT + text encoder) and Layerwise. The tables below show Layerwise support only.
 
 ### ImageGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Ulysses-SP | Ring-Attention | CFG-Parallel | Tensor-Parallel | VAE-Patch-Parallel |
-|-------|------------------|:--------:|:---------:|:----------:|:--------------:|:------------:|:---------------:|:------------------:|
-| **LongCat-Image** | `meituan-longcat/LongCat-Image` | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| **LongCat-Image-Edit** | `meituan-longcat/LongCat-Image-Edit` | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| **Ovis-Image** | `OvisAI/Ovis-Image` | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Qwen-Image** | `Qwen/Qwen-Image` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Qwen-Image-2512** | `Qwen/Qwen-Image-2512` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Qwen-Image-Edit** | `Qwen/Qwen-Image-Edit` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Qwen-Image-Edit-2509** | `Qwen/Qwen-Image-Edit-2509` | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Qwen-Image-Layered** | `Qwen/Qwen-Image-Layered` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ (TP=2 only) | ✅ |
-| **Stable-Diffusion3.5** | `stabilityai/stable-diffusion-3.5` | ❌ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ |
-| **Bagel** | `ByteDance-Seed/BAGEL-7B-MoT` | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| **FLUX.1-dev** | `black-forest-labs/FLUX.1-dev` | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| **NextStep-1.1** | `stepfun-ai/NextStep-1.1` | ❌ | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ |
-| **FLUX.2-klein** | `black-forest-labs/FLUX.2-klein-4B` | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| **FLUX.2-dev** | `black-forest-labs/FLUX.2-dev` | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ |
+| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | HSDP | Expert Parallel | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel | FP8-Quantization |
+|-------|------------------|:----------:|:-----------:|:-----------------:|:------------:|:---------------:|:----:|:---------------:|:-----------------------:|:-----------:|:------------------:|:----------------:|
+| **Bagel** | `ByteDance-Seed/BAGEL-7B-MoT` | ✅ | ✅ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **FLUX.1-dev** | `black-forest-labs/FLUX.1-dev` | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **FLUX.2-klein** | `black-forest-labs/FLUX.2-klein-4B` | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **GLM-Image** | `THUDM/glm-4-vision` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **LongCat-Image** | `meituan-longcat/LongCat-Image` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **LongCat-Image-Edit** | `meituan-longcat/LongCat-Image-Edit` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **Ovis-Image** | `OvisAI/Ovis-Image` | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **Qwen-Image** | `Qwen/Qwen-Image` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| **Qwen-Image-2512** | `Qwen/Qwen-Image-2512` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ✅ |
+| **Qwen-Image-Edit** | `Qwen/Qwen-Image-Edit` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Qwen-Image-Edit-2509** | `Qwen/Qwen-Image-Edit-2509` | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Qwen-Image-Layered** | `Qwen/Qwen-Image-Layered` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ |
+| **Stable-Diffusion3.5** | `stabilityai/stable-diffusion-3.5` | ❌ | ✅ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ | ✅ | ✅ | ❌ | ✅ (TP=2 only) | ❌ | ❌ | ❌ | ✅ | ✅ | ✅ |
 
 ### VideoGen
 
-| Model | Model Identifier | TeaCache | Cache-DiT | Ulysses-SP | Ring-Attention | CFG-Parallel | HSDP | VAE-Patch-Parallel |
-|-------|------------------|:--------:|:---------:|:----------:|:--------------:|:------------:|:----:|:----:|
-| **Wan2.1-T2V** | `Wan-AI/Wan2.1-T2V-1.3B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Wan2.1-T2V** | `Wan-AI/Wan2.1-T2V-14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Wan2.2** | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **LTX-2** | `Lightricks/LTX-2` | ❌ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
-| **DreamID-Omni** | `XuGuo699/DreamID-Omni` | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ |
+| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | HSDP | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel |
+|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:----:|:-----------------------:|:-----------:|:------------------:|
+| **Wan2.2-T2V** | `Wan-AI/Wan2.2-T2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Wan2.2-I2V** | `Wan-AI/Wan2.2-I2V-A14B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| **Wan2.2-TI2V** | `Wan-AI/Wan2.2-TI2V-5B-Diffusers` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
 
-### Quantization
+### AudioGen
 
-| Model | Model Identifier | FP8 | Int8 |
-|-------|------------------|:---:|:---:|
-| **Qwen-Image** | `Qwen/Qwen-Image` | ✅ | ✅ |
-| **Qwen-Image-2512** | `Qwen/Qwen-Image-2512` | ✅ | ✅ |
-| **Z-Image** | `Tongyi-MAI/Z-Image-Turbo` | ✅ | ✅ |
+| Model | Model Identifier | TeaCache | Cache-DiT | Sequence Parallel | CFG-Parallel | Tensor Parallel | CPU Offload (Layerwise) | LoRA Inference | VAE-Patch-Parallel |
+|-------|------------------|:--------:|:---------:|:-----------------:|:------------:|:---------------:|:-----------------------:|:-----------:|:------------------:|
+| **Stable-Audio-Open** | `stabilityai/stable-audio-open-1.0` | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
 
 
-## Performance Benchmarks
+## Feature Compatibility
 
-The following benchmarks were measured on **Qwen/Qwen-Image** and **Qwen/Qwen-Image-Edit** models generating 1024x1024 images with 50 inference steps:
+**Legend:**
+- ✅: Fully supported and tested
+- ❌: No support plan
+- ❓: Not verified yet, help wanted!
 
-!!! note "Benchmark Disclaimer"
-    These benchmarks are provided for **general reference only**. The configurations shown use default or common parameter settings and have not been exhaustively optimized for maximum performance. Actual performance may vary based on:
+|                        | TeaCache | Cache-DiT | Ulysses-SP | Ring-Attn | Tensor Parallel | CFG-Parallel | HSDP | Expert Parallel | LoRA Inference | CPU Offloading | FP8 Quant | VAE Patch Parallel |
+|------------------------|:--------:|:---------:|:----------:|:---------:|:---------------:|:------------:|:----:|:---------------:|:--------------:|:--------------:|:---------:|:------------------:|
+| **TeaCache**           |          |           |            |           |                 |              |      |                 |                |                |           |                    |
+| **Cache-DiT**          |    ❌    |           |            |           |                 |              |      |                 |                |                |           |                    |
+| **Ulysses-SP**         |    ❓    |    ❓     |            |           |                 |              |      |                 |                |                |           |                    |
+| **Ring-Attn**          |    ❓    |    ❓     |     ✅     |           |                 |              |      |                 |                |                |           |                    |
+| **Tensor Parallel**    |    ❓    |    ❓     |     ❓     |    ❓     |                 |              |      |                 |                |                |           |                    |
+| **CFG-Parallel**       |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |              |      |                 |                |                |           |                    |
+| **HSDP**               |    ❓    |    ❓     |     ✅     |    ✅     |       ❌        |      ✅      |      |                 |                |                |           |                    |
+| **Expert Parallel**    |    ❓    |    ❓     |     ❓     |    ❓     |       ✅        |      ❓      |  ❓  |                 |                |                |           |                    |
+| **LoRA Inference**     |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |                |                |           |                    |
+| **CPU Offloading**     |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |       ❓       |                |           |                    |
+| **FP8 Quant**          |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |       ❓       |       ❓       |           |                    |
+| **VAE Patch Parallel** |    ❓    |    ❓     |     ❓     |    ❓     |       ❓        |      ❓      |  ❓  |       ❓        |       ❓       |       ❓       |     ❓    |                    |
 
-    - Specific model and use case
-    - Hardware configuration
-    - Careful parameter tuning
-    - Different inference settings (e.g., number of steps, image resolution)
-
-    For optimal performance in your specific scenario, we recommend experimenting with different parameter configurations as described in the detailed guides below.
-
-| Model | Cache Backend | Cache Config | Generation Time | Speedup | Notes |
-|-------|---------------|--------------|----------------|---------|-------|
-| **Qwen/Qwen-Image** | None  | None | 20.0s | 1.0x | Baseline (diffusers) |
-| **Qwen/Qwen-Image** | TeaCache | `rel_l1_thresh=0.2` | 10.47s | **1.91x** | Recommended default setting |
-| **Qwen/Qwen-Image** | Cache-DiT | DBCache + TaylorSeer (Fn=1, Bn=0, W=8, TaylorSeer order=1) | 10.8s | **1.85x** | - |
-| **Qwen/Qwen-Image** | Cache-DiT | DBCache + TaylorSeer + SCM (Fn=8, Bn=0, W=4, TaylorSeer order=1, SCM fast) | 14.0s | **1.43x** | - |
-| **Qwen/Qwen-Image-Edit** | None | No acceleration | 51.5s | 1.0x | Baseline (diffusers) |
-| **Qwen/Qwen-Image-Edit** | Cache-DiT | Default (Fn=1, Bn=0, W=4, TaylorSeer disabled, SCM disabled) | 21.6s | **2.38x** | - |
-
-To measure the parallelism methods, we run benchmarks with **Qwen/Qwen-Image** model generating images (**2048x2048** as long sequence input) with 50 inference steps. The hardware devices are NVIDIA H800 GPUs. `sdpa` is the attention backends.
-
-| Configuration | Ulysses degree |Generation Time | Speedup |
-|---------------|----------------|---------|---------|
-| **Baseline (diffusers)** | - | 112.5s | 1.0x |
-| Ulysses-SP  |  2  |  65.2s | 1.73x |
-| Ulysses-SP  |  4  | 39.6s | 2.84x |
-| Ulysses-SP  |  8  | 30.8s | 3.65x |
-
-## Quick Start
-
-### Using TeaCache
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    cache_backend="tea_cache",
-    cache_config={"rel_l1_thresh": 0.2}  # Optional, defaults to 0.2
-)
-
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-    ),
-)
-```
-
-### Using Cache-DiT
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    cache_backend="cache_dit",
-    cache_config={
-        "Fn_compute_blocks": 1,
-        "Bn_compute_blocks": 0,
-        "max_warmup_steps": 8,
-        "enable_taylorseer": True,
-        "taylorseer_order": 1,
-    }
-)
-
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(
-        num_inference_steps=50,
-    ),
-)
-```
-
-### Using Ulysses-SP
-
-Run text-to-image:
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-ulysses_degree = 2
-
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    parallel_config=DiffusionParallelConfig(ulysses_degree=ulysses_degree)
-)
-
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(num_inference_steps=50, width=2048, height=2048),
-)
-```
+**Note:** The table shows cross-compatibility between features. If you'd like to help verify untested combinations, please contribute test results to the project!
 
 
-Run image-to-image:
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-ulysses_degree = 2
+## Learn More
 
-omni = Omni(
-    model="Qwen/Qwen-Image-Edit",
-    parallel_config=DiffusionParallelConfig(ulysses_degree=ulysses_degree)
-)
+**Cache Acceleration:**
+- **[TeaCache Configuration Guide](diffusion/cache_acceleration/teacache.md)** - Parameter tuning, performance tips, troubleshooting
+- **[Cache-DiT Advanced Guide](diffusion/cache_acceleration/cache_dit.md)** - DBCache, TaylorSeer, SCM techniques and optimization
 
-outputs = omni.generate(
-    {
-        "prompt": "turn this cat to a dog",
-        "multi_modal_data": {"image": input_image}
-    },
-    OmniDiffusionSamplingParams(num_inference_steps=50),
-)
-```
+**Parallelism Methods:**
+- **[Tensor Parallelism Guide](diffusion/parallelism/tensor_parallel.md)** - Shard DiT weights across GPUs to reduce per-GPU memory
+- **[Sequence Parallelism Guide](diffusion/parallelism/sequence_parallel.md)** - Ulysses-SP and Ring-Attention for long sequence handling
+- **[CFG Parallelism Guide](diffusion/parallelism/cfg_parallel.md)** - Distribute CFG positive/negative branches across GPUs
+- **[HSDP Guide](diffusion/parallelism/hsdp.md)** - Hybrid Sharded Data Parallel for large model memory reduction
+- **[Expert Parallelism Guide](diffusion/parallelism/expert_parallel.md)** - Expert parallelism for MoE diffusion models
 
-### Using Ring-Attention
+**Memory Optimization:**
+- **[CPU Offload Guide](diffusion/cpu_offload_diffusion.md)** - Offload model components to CPU, reduce GPU memory usage
+- **[VAE Patch Parallelism Guide](diffusion/parallelism/vae_patch_parallel.md)** - Distribute VAE decode tiling across GPUs for high-resolution images
+- **[Quantization Overview](diffusion/quantization/overview.md)** - Overview of quantization methods for diffusion models
 
-Run text-to-image:
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-ring_degree = 2
+**Extensions:**
+- **[LoRA Inference Guide](diffusion/lora.md)** - Low-Rank Adaptation for style customization and fine-tuning
 
-omni = Omni(
-    model="Qwen/Qwen-Image",
-    parallel_config=DiffusionParallelConfig(ring_degree=2)
-)
-
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(num_inference_steps=50, width=2048, height=2048),
-)
-```
-
-### Using Tensor Parallelism
-
-```python
-from vllm_omni import Omni
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-
-omni = Omni(
-    model="Tongyi-MAI/Z-Image-Turbo",
-    parallel_config=DiffusionParallelConfig(tensor_parallel_size=2),
-)
-
-outputs = omni.generate(
-    prompt="a cat reading a book",
-    num_inference_steps=9,
-    width=512,
-    height=512,
-)
-```
-
-### Using VAE Patch Parallelism
-
-```python
-from vllm_omni import Omni
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-
-omni = Omni(
-    model="Tongyi-MAI/Z-Image-Turbo",
-    parallel_config=DiffusionParallelConfig(
-        tensor_parallel_size=2,
-        vae_patch_parallel_size=2,
-    ),
-)
-
-outputs = omni.generate(
-    prompt="a cat reading a book",
-    num_inference_steps=9,
-    width=1024,
-    height=1024,
-)
-```
-
-### Using HSDP
-
-HSDP (Hybrid Sharded Data Parallel) shards model weights across GPUs to reduce per-GPU memory usage. This enables inference of large models (e.g., Wan2.2 14B) on GPUs with limited memory.
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-
-omni = Omni(
-    model="Wan-AI/Wan2.2-T2V-A14B-Diffusers",
-    parallel_config=DiffusionParallelConfig(
-        use_hsdp=True,
-        hsdp_replicate_size=1,  # Number of replica groups
-        hsdp_shard_size=8,      # Number of GPUs to shard across (or -1 for auto)
-    ),
-)
-
-outputs = omni.generate(
-    "A cat playing piano",
-    OmniDiffusionSamplingParams(num_inference_steps=50),
-)
-```
-
-### Using CFG-Parallel
-
-Run image-to-image:
-
-CFG-Parallel splits the CFG positive/negative branches across GPUs. Use it when you set a non-trivial `true_cfg_scale`.
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.diffusion.data import DiffusionParallelConfig
-cfg_parallel_size = 2
-
-omni = Omni(
-    model="Qwen/Qwen-Image-Edit",
-    parallel_config=DiffusionParallelConfig(cfg_parallel_size=cfg_parallel_size)
-)
-
-outputs = omni.generate(
-    {
-        "prompt": "turn this cat to a dog",
-        "multi_modal_data": {"image": input_image}
-    },
-    OmniDiffusionSamplingParams(num_inference_steps=50, true_cfg_scale=4.0),
-)
-```
-
-### Using FP8 Quantization
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-omni = Omni(
-    model="<your-model>",
-    quantization="fp8",
-)
-
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(num_inference_steps=50),
-)
-```
-
-### Using Int8 Quantization
-
-```python
-from vllm_omni import Omni
-from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-
-omni = Omni(
-    model="<your-model>",
-    quantization="int8",
-)
-
-outputs = omni.generate(
-    "A cat sitting on a windowsill",
-    OmniDiffusionSamplingParams(num_inference_steps=50),
-)
-```
-
-## Documentation
-
-For detailed information on each acceleration method:
-
-- **[TeaCache Guide](diffusion/teacache.md)** - Complete TeaCache documentation, configuration options, and best practices
-- **[Cache-DiT Acceleration Guide](diffusion/cache_dit_acceleration.md)** - Comprehensive Cache-DiT guide covering DBCache, TaylorSeer, SCM, and configuration parameters
-- **[Quantization Guide](diffusion/quantization/overview.md)** - Quantization for DiT models with per-layer control
-- **[Tensor Parallelism](diffusion/parallelism_acceleration.md#tensor-parallelism)** - Guidance on how to enable TP for diffusion models.
-- **[Sequence Parallelism](diffusion/parallelism_acceleration.md#sequence-parallelism)** - Guidance on how to set sequence parallelism with configuration.
-- **[CFG-Parallel](diffusion/parallelism_acceleration.md#cfg-parallel)** - Guidance on how to set CFG-Parallel to run positive/negative branches across ranks.
-- **[VAE Patch Parallelism](diffusion/parallelism_acceleration.md#vae-patch-parallelism)** - Guidance on how to reduce VAE memory via patch/tile parallelism.
-- **[HSDP](diffusion/parallelism_acceleration.md#hsdp)** - Hybrid Sharded Data Parallel for memory-efficient inference of large models.
+**Advanced Topics:**
+- **[Feature Compatibility](feature_compatibility.md)** - How to combine cache + parallelism methods for maximum performance
