@@ -158,21 +158,6 @@ _MODEL_COEFFICIENTS = {
 - Very short inference runs (< 20 steps) where caching overhead may outweigh benefits
 
 
-
-### Expected Performance
-
-| Configuration | Speedup | Quality | Use Case |
-|--------------|---------|---------|----------|
-| `rel_l1_thresh=0.2` | 1.5x-1.8x | Excellent | General use (recommended) |
-| `rel_l1_thresh=0.4` | 1.8x-2.0x | Good | Balanced speed/quality |
-| `rel_l1_thresh=0.6` | 2.0x-2.2x | Fair | Speed-critical |
-| `rel_l1_thresh=0.8` | > 2.5x | Reduced | Maximum speed |
-
-
-!!! note
-    The expected speedup ratio in this table is for reference only. Please tune the parameters based on your model and generation cases.
-
-
 ---
 
 ## Troubleshooting
