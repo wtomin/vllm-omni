@@ -96,6 +96,8 @@ nav:
       - design/feature/cfg_parallel.md
       - design/feature/sequence_parallel.md
       - design/feature/tensor_parallel.md
+      - design/feature/vae_parallel.md
+      - design/feature/hsdp.md
       - design/feature/cache_dit.md
       - design/feature/teacache.md
       - design/feature/async_chunk_design.md
