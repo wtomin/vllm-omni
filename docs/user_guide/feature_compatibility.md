@@ -215,4 +215,4 @@ vllm serve Qwen/Qwen-Image --omni --port 8091 \
 
 ## See Also
 
-- [Diffusion Acceleration Overview](../diffusion_features.md) - Main acceleration guide
+- [Diffusion Acceleration Overview](diffusion_features.md) - Main acceleration guide

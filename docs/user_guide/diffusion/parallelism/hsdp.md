@@ -138,7 +138,7 @@ In `DiffusionParallelConfig`:
 
 ### Adding HSDP Support to New Models
 
-For detailed instructions on adding HSDP support to new models, see the [HSDP Contributing Guide](../../design/feature/hsdp.md).
+For detailed instructions on adding HSDP support to new models, see the [HSDP Contributing Guide](../../../design/feature/hsdp.md).
 
 ---
 
