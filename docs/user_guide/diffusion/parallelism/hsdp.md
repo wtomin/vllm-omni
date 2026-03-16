@@ -18,7 +18,7 @@ HSDP (Hybrid Sharded Data Parallel) shards model weights across GPUs to reduce p
 
 Unlike Tensor Parallelism which splits computation, HSDP uses PyTorch's FSDP2 to shard and redistribute weights at runtime. Each GPU only holds a fraction of the model weights, and weights are gathered on-demand during forward passes.
 
-See supported models list in [Supported Models](../diffusion_features.md#supported-models).
+See supported models list in [Supported Models](../../diffusion_features.md#supported-models).
 
 **Operating Modes:**
 
