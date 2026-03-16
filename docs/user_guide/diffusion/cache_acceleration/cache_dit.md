@@ -1,4 +1,4 @@
-# Cache-DiT Acceleration Guide
+# Cache-DiT Guide
 
 
 ## Table of Content
@@ -6,6 +6,7 @@
 - [Overview](#overview)
 - [Quick Start](#quick-start)
 - [Example Script](#example-script)
+- [Acceleration Methods](#acceleration-methods)
 - [Configuration Parameters](#configuration-parameters)
 - [Best Practices](#best-practices)
 - [Troubleshooting](#troubleshooting)
@@ -16,7 +17,11 @@
 
 ## Overview
 
-Cache-DiT accelerates diffusion transformer models through intelligent caching mechanisms (DBCache, TaylorSeer, SCM), providing significant speedup with minimal quality loss. It's ideal for production deployments where inference speed matters and can be combined with other acceleration techniques for optimal performance.
+Cache-DiT accelerates diffusion transformer models through intelligent caching mechanisms, providing significant speedup with minimal quality loss. It supports multiple acceleration techniques that can be combined for optimal performance:
+
+- **DBCache**: Dual Block Cache for reducing redundant computations
+- **TaylorSeer**: Taylor expansion-based forecasting for faster inference
+- **SCM**: Step Computation Masking for selective step computation
 
 See supported models list in [Supported Models](../diffusion_features.md#supported-models).
 
@@ -26,7 +31,7 @@ See supported models list in [Supported Models](../diffusion_features.md#support
 
 ### Basic Usage
 
-Simplest working example - enable cache-dit acceleration by setting `cache_backend="cache_dit"`:
+Enable cache-dit acceleration by simply setting `cache_backend="cache_dit"`:
 
 ```python
 from vllm_omni import Omni
@@ -81,6 +86,31 @@ python text_to_image.py \
 
 See the [text_to_image.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/text_to_image/text_to_image.py) for detailed configuration options.
 
+The script uses cache-dit acceleration with a hybrid configuration combining DBCache, SCM, and TaylorSeer:
+
+```python
+omni = Omni(
+    model="Qwen/Qwen-Image",
+    cache_backend="cache_dit",
+    cache_config={
+        # Scheme: Hybrid DBCache + SCM + TaylorSeer
+        "Fn_compute_blocks": 1,  # Optimized for single-transformer models
+        "Bn_compute_blocks": 0,  # Number of backward compute blocks
+        "max_warmup_steps": 4,  # Maximum warmup steps (works for few-step models)
+        "residual_diff_threshold": 0.24,  # Higher threshold for more aggressive caching
+        "max_continuous_cached_steps": 3,  # Limit to prevent precision degradation
+        # TaylorSeer parameters [cache-dit only]
+        "enable_taylorseer": False,  # Disabled by default (not suitable for few-step models)
+        "taylorseer_order": 1,  # TaylorSeer polynomial order
+        # SCM (Step Computation Masking) parameters [cache-dit only]
+        "scm_steps_mask_policy": None,  # SCM mask policy: None (disabled), "slow", "medium", "fast", "ultra"
+        "scm_steps_policy": "dynamic",  # SCM steps policy: "dynamic" or "static"
+    }
+)
+```
+
+You can customize the configuration by modifying the `cache_config` dictionary to use only specific methods (e.g., DBCache only, DBCache + SCM, etc.) based on your quality and speed requirements.
+
 For image-to-image tasks, use the example script under `examples/offline_inference/image_to_image`:
 
 ```bash
@@ -98,7 +128,6 @@ python image_edit.py \
 
 See the [image_edit.py](https://github.com/vllm-project/vllm-omni/blob/main/examples/offline_inference/image_to_image/image_edit.py) for detailed configuration options.
 
-
 ### Online Serving
 
 ```bash
@@ -113,20 +142,99 @@ vllm serve Qwen/Qwen-Image --omni --port 8091 \
 
 ---
 
+## Acceleration Methods
+
+For comprehensive illustration, please view Cache-DiT [User Guide](https://cache-dit.readthedocs.io/en/latest/user_guide/OVERVIEWS/).
+
+### 1. DBCache (Dual Block Cache)
+
+DBCache intelligently caches intermediate transformer block outputs when the residual differences between consecutive steps are small, reducing redundant computations without sacrificing quality.
+
+**Example Configuration**:
+
+```python
+cache_config={
+    "Fn_compute_blocks": 8,           # Use first 8 blocks for difference computation
+    "Bn_compute_blocks": 0,           # No additional fusion blocks
+    "max_warmup_steps": 8,            # Cache after 8 warmup steps
+    "residual_diff_threshold": 0.12,  # Lower threshold for faster inference
+    "max_cached_steps": -1,           # No limit on cached steps
+}
+```
+
+**Performance Tips**:
+
+- Default `Fn_compute_blocks=1` works well for most cases. Increase to 8-12 for larger models or when more accuracy is needed.
+- Increase `residual_diff_threshold` (e.g., 0.12-0.15) for faster inference with slight quality trade-off, or decrease from default 0.24 for higher quality.
+- Default `max_warmup_steps=4` is optimized for few-step models. Increase to 6-8 for more steps if needed.
+
+### 2. TaylorSeer
+
+TaylorSeer uses Taylor expansion to forecast future hidden states, allowing the model to skip some computation steps while maintaining quality.
+
+**Example Configuration**:
+
+```python
+cache_config={
+    "enable_taylorseer": True,
+    "taylorseer_order": 1,  # First-order Taylor expansion
+}
+```
+
+**Performance Tips**:
+
+- TaylorSeer is **not suitable for few-step distilled models**.
+- Use `taylorseer_order=1` for most cases (good balance of speed and quality).
+- Combine with DBCache for maximum acceleration.
+- Higher orders (2-3) may improve quality but reduce speed gains.
+
+### 3. SCM (Step Computation Masking)
+
+SCM allows you to specify which steps must be computed and which can use cached results, similar to LeMiCa/EasyCache style acceleration.
+
+`scm_steps_mask_policy` options (number of compute steps out of 28):
+
+| Policy | Compute Steps | Speed | Quality |
+|--------|--------------|-------|---------|
+| `None` (default) | All | Baseline | Best |
+| `"slow"` | 18 / 28 | Moderate | High |
+| `"medium"` | 15 / 28 | Balanced | Good |
+| `"fast"` | 11 / 28 | Fast | Moderate |
+| `"ultra"` | 8 / 28 | Fastest | Lower |
+
+**Example Configuration**:
+
+```python
+cache_config={
+    "scm_steps_mask_policy": "medium",  # Balanced speed/quality
+    "scm_steps_policy": "dynamic",      # Use dynamic cache
+}
+```
+
+**Performance Tips**:
+
+- SCM is disabled by default. Enable it by setting a policy value if you need additional acceleration.
+- Start with `"medium"` policy and adjust based on quality requirements.
+- Use `"fast"` or `"ultra"` for maximum speed when quality can be slightly compromised.
+- `"dynamic"` policy generally provides better quality than `"static"`.
+- SCM mask is automatically regenerated when `num_inference_steps` changes during inference.
+
+---
+
 ## Configuration Parameters
 
-In `cache_config` passed to `Omni` constructor, it accepts the arguments of `DBCacheConfig` ([Cache-DiT API Reference](https://cache-dit.readthedocs.io/en/latest/user_guide/CACHE_API/)). Some key arguments are listed below:
+In `cache_config` passed to `Omni` constructor, it accepts the arguments of `DBCacheConfig` ([Cache-DiT API Reference](https://cache-dit.readthedocs.io/en/latest/user_guide/CACHE_API/)). Key parameters are listed below:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `Fn_compute_blocks` | int | 1 | First n Transformer blocks for difference computation  |
-| `Bn_compute_blocks` | int | 0 | Last n blocks used to fuse approximate information |
-| `max_warmup_steps` | int | 4 | Steps do not cache |
+| `Fn_compute_blocks` | int | 1 | First n blocks for difference computation (optimized for single-transformer models) |
+| `Bn_compute_blocks` | int | 0 | Last n blocks for fusion |
+| `max_warmup_steps` | int | 4 | Steps before caching starts (optimized for few-step distilled models) |
 | `max_cached_steps` | int | -1 | Max cached steps (-1 = unlimited) |
 | `max_continuous_cached_steps` | int | 3 | Max consecutive cached steps (prevents precision degradation) |
 | `residual_diff_threshold` | float | 0.24 | Residual difference threshold (higher for more aggressive caching) |
 | `num_inference_steps` | int \| None | None | Initial inference steps for SCM mask generation (optional, auto-refreshed during inference) |
-| `enable_taylorseer` | bool | False | Enable TaylorSeer acceleration |
+| `enable_taylorseer` | bool | False | Enable TaylorSeer acceleration (not suitable for few-step distilled models) |
 | `taylorseer_order` | int | 1 | Taylor expansion order |
 | `scm_steps_mask_policy` | str \| None | None | SCM mask policy (None, "slow", "medium", "fast", "ultra") |
 | `scm_steps_policy` | str | "dynamic" | SCM computation policy ("dynamic" or "static") |
@@ -148,19 +256,6 @@ In `cache_config` passed to `Omni` constructor, it accepts the arguments of `DBC
 - Non-DiT architectures (use model-specific acceleration instead)
 - Models already using few-step distillation (< 10 steps)
 
-
-### Expected Performance
-
-| Configuration | Speedup | Quality | Use Case |
-|--------------|---------|---------|----------|
-| Default (DBCache only) | 1.5x-2.0x | Excellent | General use, production |
-| DBCache + SCM Medium | 2.0x-2.5x | Very Good | Balanced speed/quality |
-| Hybrid (All methods) | 2.5x-3.0x | Good | Speed-critical applications |
-
-!!! note
-    The expected speedup ratio in this table is for reference only. Please tune the parameters based on your model and generation cases.
-
-
 ---
 
 ## Troubleshooting
@@ -180,6 +275,7 @@ cache_config={
 }
 ```
 
+---
 
 ## Summary
 
