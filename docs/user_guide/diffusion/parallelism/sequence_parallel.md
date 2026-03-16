@@ -48,6 +48,23 @@ outputs = omni.generate(
 )
 ```
 
+!!! note "Experimental UAA mode"
+    `ulysses_mode="advanced_uaa"` is an experimental extension to Ulysses-SP. It lets Ulysses attention handle arbitrary sequence lengths and arbitrary attention head counts without relying on `attention_mask`-based token padding.
+
+    In hybrid Ulysses + Ring mode, Ring still requires every rank in the same ring group to observe the same post-Ulysses sequence length. If that condition is not met, vLLM-Omni raises a validation error instead of entering the ring kernel with inconsistent shapes.
+
+To enable the experimental UAA mode, use a model/configuration that requires it. For example, `Tongyi-MAI/Z-Image-Turbo` has 30 attention heads, so `ulysses_degree=4` requires UAA because 30 is not divisible by 4:
+
+```python
+omni = Omni(
+    model="Tongyi-MAI/Z-Image-Turbo",
+    parallel_config=DiffusionParallelConfig(
+        ulysses_degree=4,
+        ulysses_mode="advanced_uaa",
+    ),
+)
+```
+
 ### Alternative Methods
 
 **Ring-Attention** (better for very long sequences):
@@ -116,6 +133,12 @@ python examples/offline_inference/text_to_image/text_to_image.py \
 vllm serve Qwen/Qwen-Image --omni --port 8091 --usp 2
 ```
 
+**Ulysses-SP with UAA mode** (for models with non-divisible head counts):
+
+```bash
+vllm serve Tongyi-MAI/Z-Image-Turbo --omni --port 8091 --usp 4 --ulysses-mode advanced_uaa
+```
+
 **Ring-Attention:**
 
 ```bash
@@ -139,13 +162,12 @@ In `DiffusionParallelConfig`:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `ulysses_degree` | int | 1 | Number of GPUs for Ulysses-SP. Uses all-to-all communication. |
-| `ring_degree` | int | 1 | Number of GPUs for Ring-Attention. Uses P2P ring communication.  |
+| `ring_degree` | int | 1 | Number of GPUs for Ring-Attention. Uses P2P ring communication. |
+| `ulysses_mode` | str | `"default"` | Ulysses attention mode. Set to `"advanced_uaa"` to handle arbitrary sequence lengths and head counts without padding. |
 
 **Notes:**
 - Total sequence parallel size equals to `ulysses_degree × ring_degree`
-- Degrees must evenly divide the sequence length for optimal performance
-
----
+- Degrees must evenly divide the sequence length for optimal performance (or use `ulysses_mode="advanced_uaa"` for Ulysses-SP)
 
 
 ## Best Practices
@@ -188,7 +210,7 @@ parallel_config=DiffusionParallelConfig(ulysses_degree=2)
 3. Try to switch between Ring-Attention and Ulysses-SP
 
 - Ring-Attention has advantages, like communication-computation overlap, but the block-wise loop overhead is relatively higher, especially for short sequences
-- Ulysses-SP: can benefit from larger bandwidth (such as NVLink), with two major constraints, the sequence length should be divisible by usp size, and the number of heads should be divisible by usp size
+- Ulysses-SP: can benefit from larger bandwidth (such as NVLink), with two major constraints, the sequence length should be divisible by usp size, and the number of heads should be divisible by usp size (or use `ulysses_mode="advanced_uaa"`)
 
 
 ### Common Issue 2: Out of Memory (OOM)
@@ -207,4 +229,5 @@ parallel_config=DiffusionParallelConfig(ulysses_degree=4)  # From 2
 ## Summary
 
 1. ✅ **Enable Sequence Parallelism** - Set `ulysses_degree` or `ring_degree` for long sequence generation
-2. ✅ **Troubleshooting** - Check GPU topology with `nvidia-smi topo -m`, reduce degree if performance doesn't scale
+2. ✅ **UAA mode** - Use `ulysses_mode="advanced_uaa"` when head count is not divisible by `ulysses_degree`
+3. ✅ **Troubleshooting** - Check GPU topology with `nvidia-smi topo -m`, reduce degree if performance doesn't scale
