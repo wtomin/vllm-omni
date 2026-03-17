@@ -67,12 +67,13 @@ Extension methods add specialized capabilities to diffusion models beyond standa
 
 | Method | Configuration | Description | Best For |
 |--------|--------------|-------------|----------|
-| **FP8** | `quantization="fp8"` | FP8 W8A8 on Ada/Hopper, weight-only on older GPUs | Memory reduction, inference speedup |
-| **Int8** | `quantization="int8"` | Int8 W8A8 | Memory reduction, inference speedup |
+| **[FP8](diffusion/quantization/fp8.md)** | `quantization="fp8"` | FP8 W8A8 on Ada/Hopper, weight-only on older GPUs | Memory reduction, inference speedup |
+| **[GGUF](diffusion/quantization/gguf.md)** | `quantization="gguf"` | Native GGUF transformer-only weights (Q4, Q8, etc.) | Memory reduction on consumer GPUs |
 
 ## Supported Models
 
 The following tables show which models support each acceleration method:
+
 - **🔀SP (Ulysses & Ring)**: Includes both Ulysses-SP and Ring-Attention methods
 - ✅ = Fully supported
 - ❌ = Not supported
@@ -125,6 +126,7 @@ The following tables show which models support each acceleration method:
 ## Feature Compatibility
 
 **Legend:**
+
 - ✅: Fully supported and tested
 - ❌: No support plan
 - 🙋: Not verified yet, help wanted!
@@ -144,34 +146,35 @@ The following tables show which models support each acceleration method:
 | **💾GGUF Quant** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | |
 | **🔧LoRA Inference** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | |
 
-> Notes:
-> 1. Tensor Parallel and HSDP are not compatible.
-> 2. TeaCache and Cache-DiT are not compatible.
-> 3. CPU Offloading (Layerwise) and CPU Offloading (Module-wise) are not compatible.
-> 4. FP8 Quantization and GGUF Quantization are not compatible.
-> 5. CPU Offloading (Layerwise) supports single-card for now.
+!!! info
+
+    1. Tensor Parallel and HSDP are not compatible.
+    2. TeaCache and Cache-DiT are not compatible.
+    3. CPU Offloading (Layerwise) and CPU Offloading (Module-wise) are not compatible.
+    4. FP8 Quantization and GGUF Quantization are not compatible.
+    5. CPU Offloading (Layerwise) supports single-card for now.
 
 
 ## Learn More
 
 **Cache Acceleration:**
+
 - **[TeaCache Configuration Guide](diffusion/cache_acceleration/teacache.md)** - Parameter tuning, performance tips, troubleshooting
 - **[Cache-DiT Advanced Guide](diffusion/cache_acceleration/cache_dit.md)** - DBCache, TaylorSeer, SCM techniques and optimization
-
 **Parallelism Methods:**
-- **[Tensor Parallelism Guide](diffusion/parallelism/tensor_parallel.md)** - Shard DiT weights across GPUs to reduce per-GPU memory
-- **[Sequence Parallelism Guide](diffusion/parallelism/sequence_parallel.md)** - Ulysses-SP and Ring-Attention for long sequence handling
-- **[CFG Parallelism Guide](diffusion/parallelism/cfg_parallel.md)** - Distribute CFG positive/negative branches across GPUs
-- **[HSDP Guide](diffusion/parallelism/hsdp.md)** - Hybrid Sharded Data Parallel for large model memory reduction
-- **[Expert Parallelism Guide](diffusion/parallelism/expert_parallel.md)** - Expert parallelism for MoE diffusion models
+
+- **[Parallelism Overview](diffusion/parallelism/overview.md)** - Tensor Parallelism, Sequence Parallelism, CFG Parallelism, HSDP, and Expert Parallelism
 
 **Memory Optimization:**
+
 - **[CPU Offload Guide](diffusion/cpu_offload_diffusion.md)** - Offload model components to CPU, reduce GPU memory usage
 - **[VAE Patch Parallelism Guide](diffusion/parallelism/vae_patch_parallel.md)** - Distribute VAE decode tiling across GPUs for high-resolution images
 - **[Quantization Overview](diffusion/quantization/overview.md)** - Overview of quantization methods for diffusion models
 
 **Extensions:**
+
 - **[LoRA Inference Guide](diffusion/lora.md)** - Low-Rank Adaptation for style customization and fine-tuning
 
 **Advanced Topics:**
-- **[Feature Compatibility](feature_compatibility.md)** - How to combine cache + parallelism methods for maximum performance
+
+- **[Feature Compatibility](feature_compatibility.md)** - How to combine multiple features for maximum performance
