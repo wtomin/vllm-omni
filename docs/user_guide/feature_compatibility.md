@@ -54,7 +54,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
   --image input.png \
   --cache-backend cache_dit \
   --cfg-parallel-size 2 \
-  --true-cfg-scale 4.0
+  --cfg-scale 4.0
 ```
 
 ### 3. CFG-Parallel + Sequence Parallelism
@@ -74,7 +74,7 @@ python examples/offline_inference/image_to_image/image_edit.py \
   --cache-backend cache_dit \
   --cfg-parallel-size 2 \
   --ulysses-degree 2 \
-  --true-cfg-scale 4.0
+  --cfg-scale 4.0
 ```
 
 ### 4. Hybrid Ulysses + Ring + Vae tiling
