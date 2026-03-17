@@ -161,6 +161,7 @@ The following tables show which models support each acceleration method:
 
 - **[TeaCache Configuration Guide](diffusion/cache_acceleration/teacache.md)** - Parameter tuning, performance tips, troubleshooting
 - **[Cache-DiT Advanced Guide](diffusion/cache_acceleration/cache_dit.md)** - DBCache, TaylorSeer, SCM techniques and optimization
+
 **Parallelism Methods:**
 
 - **[Parallelism Overview](diffusion/parallelism/overview.md)** - Tensor Parallelism, Sequence Parallelism, CFG Parallelism, HSDP, and Expert Parallelism
