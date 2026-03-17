@@ -1,9 +1,21 @@
 """
 Performance benchmark CI for Qwen/Qwen-Image text-to-image diffusion model.
 
-Each test case starts a DiffusionServer with its own parallel configuration,
-runs diffusion_benchmark_serving.py against it, and asserts that performance
-metrics stay within the configured baselines.
+Supports two server backends:
+  - vllm-omni (default): starts DiffusionServer via vllm_omni.entrypoints.cli.main,
+    benchmarks with diffusion_benchmark_serving.py --backend vllm-omni
+  - sglang: starts SglangServer via `sglang serve`,
+    benchmarks with diffusion_benchmark_serving.py --backend openai
+
+JSON config entries are distinguished by an optional "server_type" field
+(defaults to "vllm-omni"). sglang entries support two additional fields
+under server_params:
+  - "env": dict of extra environment variables (e.g. SGLANG_CACHE_DIT_ENABLED)
+  - "cache_dit_config": dict written to a temp YAML and passed as
+    --cache-dit-config to sglang serve (requires cache-dit >= 1.2.0)
+
+Results for every run are saved as individual JSON files under BENCHMARK_RESULT_DIR.
+After all tests finish, a cross-backend summary JSON is written to the same directory.
 
 GPU requirement: 4× NVIDIA H100 80 GB
 """
@@ -13,6 +25,7 @@ import os
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import datetime
@@ -25,15 +38,28 @@ import pytest
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "0"
 
-# Results directory: override via DIFFUSION_BENCHMARK_DIR env var.
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
 _DEFAULT_RESULT_DIR = Path(__file__).parent.parent / "results"
 BENCHMARK_RESULT_DIR = Path(os.environ.get("DIFFUSION_BENCHMARK_DIR", str(_DEFAULT_RESULT_DIR)))
 
 BENCHMARK_SCRIPT = str(
     Path(__file__).parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
 )
-
 CONFIG_FILE_PATH = str(Path(__file__).parent.parent / "tests" / "test_qwen_image.json")
+
+# ---------------------------------------------------------------------------
+# Cross-backend results collector (populated during test runs, written at end)
+# ---------------------------------------------------------------------------
+
+_results_lock = threading.Lock()
+_all_results: list[dict[str, Any]] = []
+
+# ---------------------------------------------------------------------------
+# Config loading
+# ---------------------------------------------------------------------------
 
 
 def load_configs(config_path: str) -> list[dict[str, Any]]:
@@ -54,16 +80,89 @@ BENCHMARK_CONFIGS = load_configs(CONFIG_FILE_PATH)
 
 _server_lock = threading.Lock()
 
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
+
+def _get_open_port() -> int:
+    """Return an available TCP port on localhost."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        return s.getsockname()[1]
+
+
+def _wait_for_port(host: str, port: int, timeout: int = 1200) -> None:
+    """Block until the given host:port accepts connections or timeout expires."""
+    start = time.time()
+    while time.time() - start < timeout:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                if s.connect_ex((host, port)) == 0:
+                    return
+        except Exception:
+            pass
+        time.sleep(2)
+    raise RuntimeError(f"Server did not start on {host}:{port} within {timeout}s")
+
+
+def _kill_process_tree(pid: int) -> None:
+    try:
+        parent = psutil.Process(pid)
+        children = parent.children(recursive=True)
+        all_pids = [pid] + [c.pid for c in children]
+
+        for child in children:
+            try:
+                child.terminate()
+            except psutil.NoSuchProcess:
+                pass
+
+        gone, alive = psutil.wait_procs(children, timeout=10)
+        for child in alive:
+            try:
+                child.kill()
+            except psutil.NoSuchProcess:
+                pass
+
+        try:
+            parent.terminate()
+            parent.wait(timeout=10)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired):
+            try:
+                parent.kill()
+            except psutil.NoSuchProcess:
+                pass
+
+        time.sleep(1)
+        still_alive = [p for p in all_pids if psutil.pid_exists(p)]
+        if still_alive:
+            print(f"Warning: processes still alive after shutdown: {still_alive}")
+            for p in still_alive:
+                try:
+                    subprocess.run(["kill", "-9", str(p)], timeout=2)
+                except Exception:
+                    pass
+    except psutil.NoSuchProcess:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# Server classes
+# ---------------------------------------------------------------------------
+
 
 class DiffusionServer:
     """Start a vLLM-Omni diffusion model server as a subprocess.
 
-    The server is launched with the diffusion-specific parallelism flags
-    (--usp, --ring, --cfg-parallel-size, --tensor-parallel-size, etc.)
-    directly on the CLI, without requiring a stage-configs YAML file.
-
-    Minimum hardware: 4× NVIDIA H100 80 GB.
+    Launched via vllm_omni.entrypoints.cli.main with the diffusion-specific
+    parallelism flags (--usp, --ring, --cfg-parallel-size, etc.) passed directly
+    on the CLI.  Minimum hardware: 4× NVIDIA H100 80 GB.
     """
+
+    server_type = "vllm-omni"
 
     def __init__(
         self,
@@ -74,9 +173,9 @@ class DiffusionServer:
     ) -> None:
         self.model = model
         self.serve_args = serve_args
-        self.proc: subprocess.Popen | None = None
         self.host = "127.0.0.1"
         self.port = port if port is not None else _get_open_port()
+        self.proc: subprocess.Popen | None = None
         self.test_name: str = ""
 
     def _start_server(self) -> None:
@@ -102,77 +201,116 @@ class DiffusionServer:
             env=env,
             cwd=str(Path(__file__).parent.parent.parent.parent),
         )
-
-        max_wait = 1200  # 20 minutes for model loading
-        start = time.time()
-        while time.time() - start < max_wait:
-            try:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(1)
-                    if s.connect_ex((self.host, self.port)) == 0:
-                        print(f"DiffusionServer ready on {self.host}:{self.port}")
-                        return
-            except Exception:
-                pass
-            time.sleep(2)
-
-        raise RuntimeError(f"DiffusionServer did not start within {max_wait}s")
-
-    def _kill_process_tree(self, pid: int) -> None:
-        try:
-            parent = psutil.Process(pid)
-            children = parent.children(recursive=True)
-            all_pids = [pid] + [c.pid for c in children]
-
-            for child in children:
-                try:
-                    child.terminate()
-                except psutil.NoSuchProcess:
-                    pass
-
-            gone, alive = psutil.wait_procs(children, timeout=10)
-            for child in alive:
-                try:
-                    child.kill()
-                except psutil.NoSuchProcess:
-                    pass
-
-            try:
-                parent.terminate()
-                parent.wait(timeout=10)
-            except (psutil.NoSuchProcess, psutil.TimeoutExpired):
-                try:
-                    parent.kill()
-                except psutil.NoSuchProcess:
-                    pass
-
-            time.sleep(1)
-            still_alive = [p for p in all_pids if psutil.pid_exists(p)]
-            if still_alive:
-                print(f"Warning: processes still alive after shutdown: {still_alive}")
-                for p in still_alive:
-                    try:
-                        subprocess.run(["kill", "-9", str(p)], timeout=2)
-                    except Exception:
-                        pass
-        except psutil.NoSuchProcess:
-            pass
+        _wait_for_port(self.host, self.port)
+        print(f"DiffusionServer ready on {self.host}:{self.port}")
 
     def __enter__(self):
         self._start_server()
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, *_):
         if self.proc:
-            self._kill_process_tree(self.proc.pid)
+            _kill_process_tree(self.proc.pid)
 
 
-def _get_open_port() -> int:
-    """Return an available TCP port on localhost."""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return s.getsockname()[1]
+class SglangServer:
+    """Start a sglang serve process for diffusion benchmarking.
+
+    Supports two Cache-DiT activation modes:
+      1. Environment variable:  pass env={"SGLANG_CACHE_DIT_ENABLED": "true"}
+      2. YAML config file:      pass cache_dit_config={...} (written to a temp
+         file and forwarded as --cache-dit-config; requires cache-dit >= 1.2.0)
+    """
+
+    server_type = "sglang"
+
+    def __init__(
+        self,
+        model: str,
+        serve_args: list[str],
+        *,
+        port: int | None = None,
+        env_overrides: dict[str, str] | None = None,
+        cache_dit_config: dict[str, Any] | None = None,
+    ) -> None:
+        self.model = model
+        self.serve_args = serve_args
+        self.host = "127.0.0.1"
+        self.port = port if port is not None else _get_open_port()
+        self.env_overrides = env_overrides or {}
+        self.cache_dit_config = cache_dit_config
+        self.proc: subprocess.Popen | None = None
+        self._tmp_yaml: str | None = None
+        self.test_name: str = ""
+
+    @staticmethod
+    def _write_cache_dit_yaml(config: dict[str, Any]) -> str:
+        """Serialize config dict to a temp YAML file and return its path."""
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+        try:
+            import yaml  # PyYAML
+
+            yaml.dump(config, tmp, default_flow_style=False)
+        except ImportError:
+            # Fallback: write flat YAML manually (no nested structures expected)
+            for k, v in config.items():
+                if isinstance(v, bool):
+                    tmp.write(f"{k}: {'true' if v else 'false'}\n")
+                elif v is None:
+                    tmp.write(f"{k}: null\n")
+                else:
+                    tmp.write(f"{k}: {v}\n")
+        tmp.close()
+        return tmp.name
+
+    def _start_server(self) -> None:
+        env = os.environ.copy()
+        env.update(self.env_overrides)
+
+        cmd = [
+            "sglang",
+            "serve",
+            "--model-path",
+            self.model,
+            "--host",
+            self.host,
+            "--port",
+            str(self.port),
+        ] + self.serve_args
+
+        if self.cache_dit_config is not None:
+            self._tmp_yaml = self._write_cache_dit_yaml(self.cache_dit_config)
+            cmd += ["--cache-dit-config", self._tmp_yaml]
+
+        print(f"Launching SglangServer: {' '.join(cmd)}")
+        if self.env_overrides:
+            print(f"  Extra env: {self.env_overrides}")
+
+        self.proc = subprocess.Popen(
+            cmd,
+            env=env,
+            cwd=str(Path(__file__).parent.parent.parent.parent),
+        )
+        _wait_for_port(self.host, self.port)
+        print(f"SglangServer ready on {self.host}:{self.port}")
+
+    def __enter__(self):
+        self._start_server()
+        return self
+
+    def __exit__(self, *_):
+        if self.proc:
+            _kill_process_tree(self.proc.pid)
+        if self._tmp_yaml:
+            try:
+                Path(self._tmp_yaml).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Config helpers
+# ---------------------------------------------------------------------------
 
 
 def _build_serve_args(serve_args_dict: dict[str, Any]) -> list[str]:
@@ -190,17 +328,28 @@ def _build_serve_args(serve_args_dict: dict[str, Any]) -> list[str]:
     return args
 
 
-def _unique_server_params(configs: list[dict[str, Any]]) -> list[tuple[str, str, list[str]]]:
-    """Return one (test_name, model, serve_args_list) tuple per unique test."""
+def _unique_server_params(configs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return one server-config dict per unique test_name."""
     seen: set[str] = set()
-    result: list[tuple[str, str, list[str]]] = []
+    result: list[dict[str, Any]] = []
     for cfg in configs:
         test_name = cfg["test_name"]
-        if test_name not in seen:
-            seen.add(test_name)
-            model = cfg["server_params"]["model"]
-            serve_args = _build_serve_args(cfg["server_params"].get("serve_args", {}))
-            result.append((test_name, model, serve_args))
+        if test_name in seen:
+            continue
+        seen.add(test_name)
+        server_type = cfg.get("server_type", "vllm-omni")
+        result.append(
+            {
+                "test_name": test_name,
+                "server_type": server_type,
+                "model": cfg["server_params"]["model"],
+                "serve_args": _build_serve_args(cfg["server_params"].get("serve_args", {})),
+                "env_overrides": cfg["server_params"].get("env", {}),
+                "cache_dit_config": cfg["server_params"].get("cache_dit_config"),
+                # benchmark script --backend arg: sglang exposes OpenAI Image API
+                "benchmark_backend": "openai" if server_type == "sglang" else "vllm-omni",
+            }
+        )
     return result
 
 
@@ -213,32 +362,63 @@ def _test_param_mapping(configs: list[dict[str, Any]]) -> dict[str, list[dict]]:
     return mapping
 
 
+def _make_server(server_cfg: dict[str, Any]) -> DiffusionServer | SglangServer:
+    """Factory: return the appropriate server instance for the given config."""
+    model = server_cfg["model"]
+    serve_args = server_cfg["serve_args"]
+    if server_cfg["server_type"] == "sglang":
+        return SglangServer(
+            model=model,
+            serve_args=serve_args,
+            env_overrides=server_cfg.get("env_overrides", {}),
+            cache_dit_config=server_cfg.get("cache_dit_config"),
+        )
+    return DiffusionServer(model=model, serve_args=serve_args)
+
+
+# ---------------------------------------------------------------------------
+# Parametrize data
+# ---------------------------------------------------------------------------
+
 server_params = _unique_server_params(BENCHMARK_CONFIGS)
 test_param_map = _test_param_mapping(BENCHMARK_CONFIGS)
 
 benchmark_indices: list[tuple[str, int]] = []
-for cfg in BENCHMARK_CONFIGS:
-    name = cfg["test_name"]
-    for idx in range(len(test_param_map[name])):
-        entry = (name, idx)
-        if entry not in benchmark_indices:
-            benchmark_indices.append(entry)
+for _cfg in BENCHMARK_CONFIGS:
+    _name = _cfg["test_name"]
+    for _idx in range(len(test_param_map[_name])):
+        _entry = (_name, _idx)
+        if _entry not in benchmark_indices:
+            benchmark_indices.append(_entry)
+
+# ---------------------------------------------------------------------------
+# Pytest fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _write_summary_on_finish():
+    """Write a cross-backend comparison JSON after the entire session ends."""
+    yield
+    _write_summary()
 
 
 @pytest.fixture(scope="module")
 def diffusion_server(request):
-    """Start one DiffusionServer per unique test configuration (module scope)."""
+    """Start one server (vllm-omni or sglang) per unique test configuration."""
     with _server_lock:
-        test_name, model, serve_args = request.param
+        server_cfg: dict[str, Any] = request.param
+        test_name = server_cfg["test_name"]
+        server_type = server_cfg["server_type"]
 
-        print(f"\nStarting DiffusionServer for test: {test_name}, model: {model}")
-        with DiffusionServer(model, serve_args) as server:
+        print(f"\nStarting {server_type} server for test: {test_name}")
+        with _make_server(server_cfg) as server:
             server.test_name = test_name
-            print("DiffusionServer started successfully")
+            print(f"{server_type} server started successfully")
             yield server
-            print("DiffusionServer stopping…")
+            print(f"{server_type} server stopping…")
 
-    print("DiffusionServer stopped")
+    print(f"{server_type} server stopped")
 
 
 @pytest.fixture(params=benchmark_indices)
@@ -261,17 +441,27 @@ def benchmark_params(request, diffusion_server):
     return {"test_name": test_name, "params": params_list[param_index]}
 
 
+# ---------------------------------------------------------------------------
+# Benchmark runner
+# ---------------------------------------------------------------------------
+
+
 def run_benchmark(
     host: str,
     port: int,
     model: str,
     params: dict[str, Any],
     test_name: str,
+    backend: str = "vllm-omni",
 ) -> dict[str, Any]:
-    """Run diffusion_benchmark_serving.py as a subprocess and return parsed metrics."""
+    """Run diffusion_benchmark_serving.py as a subprocess and return parsed metrics.
+
+    The result JSON is saved under BENCHMARK_RESULT_DIR with the backend name
+    embedded in the filename so vllm-omni and sglang results stay distinct.
+    """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    result_file = BENCHMARK_RESULT_DIR / f"diffusion_perf_{test_name}_{timestamp}.json"
+    result_file = BENCHMARK_RESULT_DIR / f"diffusion_perf_{backend}_{test_name}_{timestamp}.json"
 
     exclude_keys = {"baseline", "dataset", "task"}
 
@@ -285,7 +475,7 @@ def run_benchmark(
         "--model",
         model,
         "--backend",
-        "vllm-omni",
+        backend,
         "--dataset",
         params.get("dataset", "random"),
         "--task",
@@ -306,7 +496,7 @@ def run_benchmark(
         else:
             cmd.extend([flag, str(value)])
 
-    print(f"\nRunning benchmark: {' '.join(cmd)}")
+    print(f"\nRunning benchmark (backend={backend}): {' '.join(cmd)}")
 
     process = subprocess.Popen(
         cmd,
@@ -333,14 +523,93 @@ def run_benchmark(
         return json.load(f)
 
 
+# ---------------------------------------------------------------------------
+# Summary output
+# ---------------------------------------------------------------------------
+
+_SUMMARY_METRIC_KEYS = (
+    "throughput_qps",
+    "latency_mean",
+    "latency_median",
+    "latency_p50",
+    "latency_p99",
+    "peak_memory_mb_max",
+    "peak_memory_mb_mean",
+    "peak_memory_mb_median",
+)
+
+
+def _write_summary() -> None:
+    """Write a cross-backend comparison JSON to BENCHMARK_RESULT_DIR."""
+    with _results_lock:
+        snapshot = list(_all_results)
+
+    if not snapshot:
+        return
+
+    BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    summary_path = BENCHMARK_RESULT_DIR / f"benchmark_summary_{timestamp}.json"
+
+    # Build a grouped comparison: test_name → {vllm-omni: metrics, sglang: metrics}
+    comparison: dict[str, dict[str, Any]] = {}
+    for entry in snapshot:
+        name = entry["test_name"]
+        stype = entry["server_type"]
+        comparison.setdefault(name, {})
+        comparison[name][stype] = {
+            "backend_arg": entry["benchmark_backend"],
+            "params": entry["params_summary"],
+            "metrics": entry["metrics"],
+        }
+
+    output = {
+        "generated_at": datetime.now().isoformat(),
+        "result_dir": str(BENCHMARK_RESULT_DIR),
+        "per_test": snapshot,
+        "comparison": comparison,
+    }
+
+    with open(summary_path, "w", encoding="utf-8") as f:
+        json.dump(output, f, indent=2)
+
+    print(f"\n{'=' * 60}")
+    print(f"Cross-backend summary saved to: {summary_path}")
+    _print_comparison_table(comparison)
+    print("=" * 60)
+
+
+def _print_comparison_table(comparison: dict[str, dict[str, Any]]) -> None:
+    """Print a human-readable side-by-side comparison table."""
+    metric_col = 28
+    val_col = 14
+
+    for test_name, backends in comparison.items():
+        print(f"\n  {test_name}")
+        server_types = list(backends.keys())
+        header = f"  {'Metric':<{metric_col}}" + "".join(f"{st:>{val_col}}" for st in server_types)
+        print(header)
+        print("  " + "-" * (metric_col + val_col * len(server_types)))
+        for key in _SUMMARY_METRIC_KEYS:
+            row = f"  {key:<{metric_col}}"
+            for st in server_types:
+                val = backends[st]["metrics"].get(key)
+                row += f"{val:>{val_col}.4f}" if isinstance(val, float) else f"{'N/A':>{val_col}}"
+            print(row)
+
+
+# ---------------------------------------------------------------------------
+# Assertions
+# ---------------------------------------------------------------------------
+
+
 def assert_result(result: dict[str, Any], params: dict[str, Any]) -> None:
     """Assert that benchmark metrics satisfy the configured baselines."""
     num_prompts = params.get("num-prompts", 10)
     completed = result.get("completed_requests", result.get("completed", 0))
     assert completed == num_prompts, f"Expected {num_prompts} completed requests, got {completed}"
 
-    baseline = params.get("baseline", {})
-    for metric, threshold in baseline.items():
+    for metric, threshold in params.get("baseline", {}).items():
         current = result.get(metric)
         assert current is not None, f"Metric '{metric}' not found in result: {list(result.keys())}"
         if "throughput" in metric:
@@ -349,21 +618,35 @@ def assert_result(result: dict[str, Any], params: dict[str, Any]) -> None:
             assert current <= threshold, f"{metric}: {current:.4f} > baseline {threshold}"
 
 
-@pytest.mark.parametrize("diffusion_server", server_params, indirect=True)
+# ---------------------------------------------------------------------------
+# Test entry point
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "diffusion_server",
+    server_params,
+    ids=[p["test_name"] for p in server_params],
+    indirect=True,
+)
 @pytest.mark.parametrize("benchmark_params", benchmark_indices, indirect=True)
 def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
     """Run the diffusion performance benchmark and assert against baselines.
 
     One server is started per unique parallel configuration (module scope).
-    For each server, all benchmark parameter sets defined in test.json are
-    executed sequentially, and results are asserted against the baselines.
+    For each server, all benchmark parameter sets defined in test_qwen_image.json
+    are executed sequentially; results are asserted against the baselines.
+
+    Both vllm-omni and sglang results are saved as individual JSON files and
+    combined into a cross-backend summary JSON at session end.
 
     Tracked metrics:
-        - throughput_qps (higher is better)
+        - throughput_qps          (higher is better)
         - latency_p50, latency_p99 (lower is better)
     """
     test_name = benchmark_params["test_name"]
     params = benchmark_params["params"]
+    backend = diffusion_server.server_type if diffusion_server.server_type == "vllm-omni" else "openai"
 
     result = run_benchmark(
         host=diffusion_server.host,
@@ -371,25 +654,32 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
         model=diffusion_server.model,
         params=params,
         test_name=test_name,
+        backend=backend,
     )
 
+    # Accumulate for cross-backend summary
+    with _results_lock:
+        _all_results.append(
+            {
+                "test_name": test_name,
+                "server_type": diffusion_server.server_type,
+                "benchmark_backend": backend,
+                "params_summary": {k: v for k, v in params.items() if k != "baseline"},
+                "metrics": {k: result[k] for k in _SUMMARY_METRIC_KEYS if result.get(k) is not None},
+            }
+        )
+
     print(f"\n{'=' * 60}")
-    print(f"Results for {test_name}:")
-    for key in (
-        "throughput_qps",
-        "latency_mean",
-        "latency_median",
-        "latency_p50",
-        "latency_p99",
-    ):
+    print(f"Results for {test_name} (server={diffusion_server.server_type}, backend={backend}):")
+    for key in _SUMMARY_METRIC_KEYS:
         if key in result:
             print(f"  {key}: {result[key]:.4f}")
-    # List all saved result files for this test
-    saved = sorted(BENCHMARK_RESULT_DIR.glob(f"diffusion_perf_{test_name}_*.json"))
+
+    saved = sorted(BENCHMARK_RESULT_DIR.glob(f"diffusion_perf_{backend}_{test_name}_*.json"))
     if saved:
-        print(f"\n  Result files saved to: {BENCHMARK_RESULT_DIR}")
+        print(f"\n  Result files: {BENCHMARK_RESULT_DIR}")
         for f in saved:
             print(f"    {f.name}")
-    print(f"{'=' * 60}")
+    print("=" * 60)
 
     assert_result(result, params)
