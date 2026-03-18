@@ -275,15 +275,7 @@ async def async_request_image_sglang(
 
         if input.num_inference_steps:
             payload["num_inference_steps"] = input.num_inference_steps
-        if input.negative_prompt:
-            payload["negative_prompt"] = input.negative_prompt
-        if input.guidance_scale:
-            payload["guidance_scale"] = input.guidance_scale
-        if input.cfg_scale:
-            payload["cfg_scale"] = input.cfg_scale
-        if input.seed:
-            payload["seed"] = input.seed
-        # Merge extra parameters
+
         payload.update(input.extra_body)
 
         try:
@@ -395,14 +387,6 @@ async def async_request_video_sglang(
         if input.num_inference_steps:   
             payload["num_inference_steps"] = input.num_inference_steps
 
-        if input.negative_prompt:
-            payload["negative_prompt"] = input.negative_prompt
-        if input.guidance_scale:
-            payload["guidance_scale"] = input.guidance_scale
-        if input.cfg_scale:
-            payload["cfg_scale"] = input.cfg_scale
-        if input.seed:
-            payload["seed"] = input.seed
  
         payload.update(input.extra_body)
 
