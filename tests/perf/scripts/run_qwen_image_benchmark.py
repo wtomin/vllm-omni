@@ -75,13 +75,6 @@ def _get_config_file_from_argv() -> str:
 CONFIG_FILE_PATH = _get_config_file_from_argv()
 
 # ---------------------------------------------------------------------------
-# Cross-backend results collector (populated during test runs, written at end)
-# ---------------------------------------------------------------------------
-
-_results_lock = threading.Lock()
-_all_results: list[dict[str, Any]] = []
-
-# ---------------------------------------------------------------------------
 # Config loading
 # ---------------------------------------------------------------------------
 
@@ -434,12 +427,6 @@ for _cfg in BENCHMARK_CONFIGS:
 # ---------------------------------------------------------------------------
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _write_summary_on_finish():
-    """Write a cross-backend comparison JSON after the entire session ends."""
-    yield
-    _write_summary()
-
 
 @pytest.fixture(scope="module")
 def diffusion_server(request):
@@ -562,81 +549,6 @@ def run_benchmark(
 
 
 # ---------------------------------------------------------------------------
-# Summary output
-# ---------------------------------------------------------------------------
-
-_SUMMARY_METRIC_KEYS = (
-    "throughput_qps",
-    "latency_mean",
-    "latency_median",
-    "latency_p50",
-    "latency_p99",
-    "peak_memory_mb_max",
-    "peak_memory_mb_mean",
-    "peak_memory_mb_median",
-)
-
-
-def _write_summary() -> None:
-    """Write a cross-backend comparison JSON to BENCHMARK_RESULT_DIR."""
-    with _results_lock:
-        snapshot = list(_all_results)
-
-    if not snapshot:
-        return
-
-    BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    summary_path = BENCHMARK_RESULT_DIR / f"benchmark_summary_{timestamp}.json"
-
-    # Build a grouped comparison: test_name → {vllm-omni: metrics, sglang: metrics}
-    comparison: dict[str, dict[str, Any]] = {}
-    for entry in snapshot:
-        name = entry["test_name"]
-        stype = entry["server_type"]
-        comparison.setdefault(name, {})
-        comparison[name][stype] = {
-            "backend_arg": entry["benchmark_backend"],
-            "params": entry["params_summary"],
-            "metrics": entry["metrics"],
-        }
-
-    output = {
-        "generated_at": datetime.now().isoformat(),
-        "result_dir": str(BENCHMARK_RESULT_DIR),
-        "per_test": snapshot,
-        "comparison": comparison,
-    }
-
-    with open(summary_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, indent=2)
-
-    print(f"\n{'=' * 60}")
-    print(f"Cross-backend summary saved to: {summary_path}")
-    _print_comparison_table(comparison)
-    print("=" * 60)
-
-
-def _print_comparison_table(comparison: dict[str, dict[str, Any]]) -> None:
-    """Print a human-readable side-by-side comparison table."""
-    metric_col = 28
-    val_col = 14
-
-    for test_name, backends in comparison.items():
-        print(f"\n  {test_name}")
-        server_types = list(backends.keys())
-        header = f"  {'Metric':<{metric_col}}" + "".join(f"{st:>{val_col}}" for st in server_types)
-        print(header)
-        print("  " + "-" * (metric_col + val_col * len(server_types)))
-        for key in _SUMMARY_METRIC_KEYS:
-            row = f"  {key:<{metric_col}}"
-            for st in server_types:
-                val = backends[st]["metrics"].get(key)
-                row += f"{val:>{val_col}.4f}" if isinstance(val, float) else f"{'N/A':>{val_col}}"
-            print(row)
-
-
-# ---------------------------------------------------------------------------
 # Assertions
 # ---------------------------------------------------------------------------
 
@@ -672,11 +584,8 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
     """Run the diffusion performance benchmark and assert against baselines.
 
     One server is started per unique parallel configuration (module scope).
-    For each server, all benchmark parameter sets defined in test_qwen_image.json
+    For each server, all benchmark parameter sets defined in the config JSON
     are executed sequentially; results are asserted against the baselines.
-
-    Both vllm-omni and sglang results are saved as individual JSON files and
-    combined into a cross-backend summary JSON at session end.
 
     Tracked metrics:
         - throughput_qps          (higher is better)
@@ -695,21 +604,10 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
         backend=backend,
     )
 
-    # Accumulate for cross-backend summary
-    with _results_lock:
-        _all_results.append(
-            {
-                "test_name": test_name,
-                "server_type": diffusion_server.server_type,
-                "benchmark_backend": backend,
-                "params_summary": {k: v for k, v in params.items() if k != "baseline"},
-                "metrics": {k: result[k] for k in _SUMMARY_METRIC_KEYS if result.get(k) is not None},
-            }
-        )
-
     print(f"\n{'=' * 60}")
     print(f"Results for {test_name} (server={diffusion_server.server_type}, backend={backend}):")
-    for key in _SUMMARY_METRIC_KEYS:
+    for key in ("throughput_qps", "latency_mean", "latency_median", "latency_p50", "latency_p99",
+                "peak_memory_mb_max", "peak_memory_mb_mean", "peak_memory_mb_median"):
         if key in result:
             print(f"  {key}: {result[key]:.4f}")
 
