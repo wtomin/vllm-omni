@@ -20,7 +20,7 @@
                 "num-prompts": 10,
                 "max-concurrency": 1,
                 "negative-prompt": "blurry, low quality, distorted",
-                "cfg-scale": 4.0,
+                "true-cfg-scale": 4.0,
                 "baseline": {
                     "throughput_qps": 0.001,
                     "latency_p99": 1000.0,
@@ -51,7 +51,7 @@
                 "num-prompts": 10,
                 "max-concurrency": 1,
                 "negative-prompt": "blurry, low quality, distorted",
-                "cfg-scale": 4.0,
+                "true-cfg-scale": 4.0,
                 "baseline": {
                     "throughput_qps": 0.001,
                     "latency_p99": 1000.0,
@@ -82,7 +82,7 @@
                 "num-prompts": 10,
                 "max-concurrency": 1,
                 "negative-prompt": "blurry, low quality, distorted",
-                "cfg-scale": 4.0,
+                "true-cfg-scale": 4.0,
                 "baseline": {
                     "throughput_qps": 0.001,
                     "latency_p99": 1000.0,
@@ -114,7 +114,7 @@
                 "num-prompts": 10,
                 "max-concurrency": 1,
                 "negative-prompt": "blurry, low quality, distorted",
-                "cfg-scale": 4.0,
+                "true-cfg-scale": 4.0,
                 "baseline": {
                     "throughput_qps": 0.001,
                     "latency_p99": 1000.0,
@@ -146,7 +146,7 @@
                 "num-prompts": 10,
                 "max-concurrency": 1,
                 "negative-prompt": "blurry, low quality, distorted",
-                "cfg-scale": 4.0,
+                "true-cfg-scale": 4.0,
                 "baseline": {
                     "throughput_qps": 0.001,
                     "latency_p99": 1000.0,
@@ -179,7 +179,7 @@
                 "num-prompts": 10,
                 "max-concurrency": 1,
                 "negative-prompt": "blurry, low quality, distorted",
-                "cfg-scale": 4.0,
+                "true-cfg-scale": 4.0,
                 "baseline": {
                     "throughput_qps": 0.001,
                     "latency_p99": 1000.0,
