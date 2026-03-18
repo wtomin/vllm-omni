@@ -377,8 +377,7 @@ def _unique_server_params(configs: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "serve_args": _build_serve_args(cfg["server_params"].get("serve_args", {})),
                 "env_overrides": cfg["server_params"].get("env", {}),
                 "cache_dit_config": cfg["server_params"].get("cache_dit_config"),
-                # benchmark script --backend arg: sglang exposes OpenAI Image API
-                "benchmark_backend": "openai" if server_type == "sglang" else "vllm-omni",
+                "benchmark_backend": server_type,  # "vllm-omni" or "sglang"
             }
         )
     return result
@@ -593,7 +592,7 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
     """
     test_name = benchmark_params["test_name"]
     params = benchmark_params["params"]
-    backend = diffusion_server.server_type if diffusion_server.server_type == "vllm-omni" else "openai"
+    backend = diffusion_server.server_type  # "vllm-omni" or "sglang"
 
     result = run_benchmark(
         host=diffusion_server.host,
