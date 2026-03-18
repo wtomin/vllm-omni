@@ -1,0 +1,192 @@
+[
+    {
+        "test_name": "test_qwen_image_ulysses2_cfg2",
+        "description": "Ulysses SP=2 + CFG-parallel=2 (baseline distributed config)",
+        "server_type": "vllm-omni",
+        "server_params": {
+            "model": "Qwen/Qwen-Image",
+            "serve_args": {
+                "ulysses-degree": 2,
+                "cfg-parallel-size": 2
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2i",
+                "width": 512,
+                "height": 512,
+                "num-inference-steps": 10,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "negative-prompt": "blurry, low quality, distorted",
+                "cfg-scale": 4.0,
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_qwen_image_ulysses2_ring2",
+        "description": "Ulysses SP=2 + Ring SP=2 (hybrid sequence parallelism)",
+        "server_type": "vllm-omni",
+        "server_params": {
+            "model": "Qwen/Qwen-Image",
+            "serve_args": {
+                "ulysses-degree": 2,
+                "ring": 2
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2i",
+                "width": 512,
+                "height": 512,
+                "num-inference-steps": 10,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "negative-prompt": "blurry, low quality, distorted",
+                "cfg-scale": 4.0,
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_qwen_image_ulysses2_tp2",
+        "description": "Ulysses SP=2 + Tensor Parallel=2",
+        "server_type": "vllm-omni",
+        "server_params": {
+            "model": "Qwen/Qwen-Image",
+            "serve_args": {
+                "ulysses-degree": 2,
+                "tensor-parallel-size": 2
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2i",
+                "width": 512,
+                "height": 512,
+                "num-inference-steps": 10,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "negative-prompt": "blurry, low quality, distorted",
+                "cfg-scale": 4.0,
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_qwen_image_ulysses2_cfg2_fp8",
+        "description": "Ulysses SP=2 + CFG-parallel=2 + FP8 quantization",
+        "server_type": "vllm-omni",
+        "server_params": {
+            "model": "Qwen/Qwen-Image",
+            "serve_args": {
+                "ulysses-degree": 2,
+                "cfg-parallel-size": 2,
+                "quantization-config": {"method": "fp8"}
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2i",
+                "width": 512,
+                "height": 512,
+                "num-inference-steps": 10,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "negative-prompt": "blurry, low quality, distorted",
+                "cfg-scale": 4.0,
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_qwen_image_ulysses2_cfg2_cache_dit",
+        "description": "Ulysses SP=2 + CFG-parallel=2 + CacheDiT acceleration",
+        "server_type": "vllm-omni",
+        "server_params": {
+            "model": "Qwen/Qwen-Image",
+            "serve_args": {
+                "ulysses-degree": 2,
+                "cfg-parallel-size": 2,
+                "cache-backend": "cache_dit"
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2i",
+                "width": 512,
+                "height": 512,
+                "num-inference-steps": 10,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "negative-prompt": "blurry, low quality, distorted",
+                "cfg-scale": 4.0,
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    },
+    {
+        "test_name": "test_qwen_image_ulysses2_cfg2_vae_patch4",
+        "description": "Ulysses SP=2 + CFG-parallel=2 + VAE Patch Parallel=4",
+        "server_type": "vllm-omni",
+        "server_params": {
+            "model": "Qwen/Qwen-Image",
+            "serve_args": {
+                "ulysses-degree": 2,
+                "cfg-parallel-size": 2,
+                "vae-patch-parallel-size": 4,
+                "vae-use-tiling": true
+            }
+        },
+        "benchmark_params": [
+            {
+                "dataset": "random",
+                "task": "t2i",
+                "width": 512,
+                "height": 512,
+                "num-inference-steps": 10,
+                "num-prompts": 10,
+                "max-concurrency": 1,
+                "negative-prompt": "blurry, low quality, distorted",
+                "cfg-scale": 4.0,
+                "baseline": {
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
+                }
+            }
+        ]
+    }
+]
