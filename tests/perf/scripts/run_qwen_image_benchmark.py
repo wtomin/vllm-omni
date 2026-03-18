@@ -7,9 +7,15 @@ Supports two server backends:
   - sglang: starts SglangServer via `sglang serve`,
     benchmarks with diffusion_benchmark_serving.py --backend openai
 
-JSON config entries are distinguished by an optional "server_type" field
-(defaults to "vllm-omni"). sglang entries support two additional fields
-under server_params:
+Config files (under tests/perf/tests/):
+  - test_qwen_image_vllm_omni.json  ← default
+  - test_qwen_image_sglang.json
+
+Override the config file via --config-file:
+  pytest run_qwen_image_benchmark.py --config-file tests/perf/tests/test_qwen_image_sglang.json
+
+JSON config entries are distinguished by a "server_type" field ("vllm-omni" or "sglang").
+sglang entries support two additional fields under server_params:
   - "env": dict of extra environment variables (e.g. SGLANG_CACHE_DIT_ENABLED)
   - "cache_dit_config": dict written to a temp YAML and passed as
     --cache-dit-config to sglang serve (requires cache-dit >= 1.2.0)
@@ -48,7 +54,25 @@ BENCHMARK_RESULT_DIR = Path(os.environ.get("DIFFUSION_BENCHMARK_DIR", str(_DEFAU
 BENCHMARK_SCRIPT = str(
     Path(__file__).parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
 )
-CONFIG_FILE_PATH = str(Path(__file__).parent.parent / "tests" / "test_qwen_image.json")
+
+_DEFAULT_CONFIG_FILE = str(Path(__file__).parent.parent / "tests" / "test_qwen_image_vllm_omni.json")
+
+
+def _get_config_file_from_argv() -> str:
+    """Read --config-file from sys.argv at import time so pytest parametrize can use it.
+
+    pytest_addoption (below) registers the same flag so pytest does not reject it.
+    Supports both ``--config-file path`` and ``--config-file=path`` forms.
+    """
+    for i, arg in enumerate(sys.argv):
+        if arg == "--config-file" and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        if arg.startswith("--config-file="):
+            return arg.split("=", 1)[1]
+    return _DEFAULT_CONFIG_FILE
+
+
+CONFIG_FILE_PATH = _get_config_file_from_argv()
 
 # ---------------------------------------------------------------------------
 # Cross-backend results collector (populated during test runs, written at end)
@@ -77,6 +101,20 @@ def load_configs(config_path: str) -> list[dict[str, Any]]:
 
 
 BENCHMARK_CONFIGS = load_configs(CONFIG_FILE_PATH)
+
+
+# Register --config-file with pytest so it does not reject the argument.
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--config-file",
+        action="store",
+        default=_DEFAULT_CONFIG_FILE,
+        help=(
+            "Path to the benchmark config JSON file. "
+            f"Defaults to test_qwen_image_vllm_omni.json. "
+            "Example: --config-file tests/perf/tests/test_qwen_image_sglang.json"
+        ),
+    )
 
 _server_lock = threading.Lock()
 
