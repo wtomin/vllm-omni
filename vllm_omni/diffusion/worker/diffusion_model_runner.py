@@ -190,6 +190,26 @@ class DiffusionModelRunner:
         """Load weights into the pipeline."""
         return self.pipeline.load_weights(weights)
 
+    def do_mem_analysis(self, output: DiffusionOutput) -> None:
+        # for details on max_memory_reserved: https://docs.pytorch.org/docs/stable/generated/torch.cuda.memory.max_memory_reserved.html
+        peak_reserved_bytes = torch.get_device_module().max_memory_reserved()
+        peak_allocated_bytes = torch.get_device_module().max_memory_allocated()
+
+        output.peak_memory_mb = peak_reserved_bytes / (1024**2)
+        peak_reserved_gb = peak_reserved_bytes / (1024**3)
+        peak_allocated_gb = peak_allocated_bytes / (1024**3)
+
+        remaining_gpu_mem_gb = current_omni_platform.get_device_total_memory() / (1024**3) - peak_reserved_gb
+
+        pool_overhead_gb = peak_reserved_gb - peak_allocated_gb
+
+        logger.info(
+            f"Peak GPU memory: {peak_reserved_gb:.2f} GB, "
+            f"Peak allocated: {peak_allocated_gb:.2f} GB, "
+            f"Memory pool overhead: {pool_overhead_gb:.2f} GB ({pool_overhead_gb / peak_reserved_gb * 100:.1f}%), "
+            f"Remaining GPU memory at peak: {remaining_gpu_mem_gb:.2f} GB. "
+        )
+
     def execute_model(self, req: OmniDiffusionRequest) -> DiffusionOutput:
         """
         Execute a forward pass for the given requests.
