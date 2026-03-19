@@ -190,24 +190,31 @@ class DiffusionModelRunner:
         """Load weights into the pipeline."""
         return self.pipeline.load_weights(weights)
 
-    def do_mem_analysis(self, output: DiffusionOutput) -> None:
-        # for details on max_memory_reserved: https://docs.pytorch.org/docs/stable/generated/torch.cuda.memory.max_memory_reserved.html
+    def _record_peak_memory(self, output: DiffusionOutput) -> None:
+        """Record peak GPU memory for the current forward pass into output.
+
+        Must be called immediately after pipeline.forward(), with
+        reset_peak_memory_stats() called just before it, so the measurement
+        reflects this request only and not the global historical maximum.
+
+        Uses max_memory_reserved (CUDA memory pool high-water mark) rather than
+        max_memory_allocated so that allocator fragmentation is also visible.
+        See: https://docs.pytorch.org/docs/stable/generated/torch.cuda.memory.max_memory_reserved.html
+        """
         peak_reserved_bytes = torch.get_device_module().max_memory_reserved()
         peak_allocated_bytes = torch.get_device_module().max_memory_allocated()
 
         output.peak_memory_mb = peak_reserved_bytes / (1024**2)
         peak_reserved_gb = peak_reserved_bytes / (1024**3)
         peak_allocated_gb = peak_allocated_bytes / (1024**3)
-
-        remaining_gpu_mem_gb = current_omni_platform.get_device_total_memory() / (1024**3) - peak_reserved_gb
-
         pool_overhead_gb = peak_reserved_gb - peak_allocated_gb
 
         logger.info(
-            f"Peak GPU memory: {peak_reserved_gb:.2f} GB, "
-            f"Peak allocated: {peak_allocated_gb:.2f} GB, "
-            f"Memory pool overhead: {pool_overhead_gb:.2f} GB ({pool_overhead_gb / peak_reserved_gb * 100:.1f}%), "
-            f"Remaining GPU memory at peak: {remaining_gpu_mem_gb:.2f} GB. "
+            "Peak GPU memory (this request): %.2f GB reserved, %.2f GB allocated, %.2f GB pool overhead (%.1f%%)",
+            peak_reserved_gb,
+            peak_allocated_gb,
+            pool_overhead_gb,
+            pool_overhead_gb / peak_reserved_gb * 100 if peak_reserved_gb > 0 else 0.0,
         )
 
     def execute_model(self, req: OmniDiffusionRequest) -> DiffusionOutput:
@@ -259,9 +266,16 @@ class DiffusionModelRunner:
             ):
                 self.cache_backend.refresh(self.pipeline, req.sampling_params.num_inference_steps)
 
+            is_primary = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
+            if is_primary:
+                torch.get_device_module().reset_peak_memory_stats()
+
             with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
                 with record_function("pipeline_forward"):
                     output = self.pipeline.forward(req)
+
+            if is_primary:
+                self._record_peak_memory(output)
 
             # NOTE:
             if (
