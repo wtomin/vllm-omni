@@ -502,9 +502,11 @@ def run_benchmark(
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    result_file = BENCHMARK_RESULT_DIR / f"diffusion_perf_{backend}_{test_name}_{timestamp}.json"
+    param_name = params.get("name", "")
+    name_suffix = f"_{param_name}" if param_name else ""
+    result_file = BENCHMARK_RESULT_DIR / f"diffusion_perf_{backend}_{test_name}{name_suffix}_{timestamp}.json"
 
-    exclude_keys = {"baseline", "dataset", "task"}
+    exclude_keys = {"baseline", "dataset", "task", "name"}
 
     cmd = [
         sys.executable,
