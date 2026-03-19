@@ -1,5 +1,6 @@
 [
     {
+        "name": "512x512_steps20",
         "dataset": "random",
         "task": "t2i",
         "width": 512,
@@ -17,6 +18,7 @@
         }
     },
     {
+        "name": "1536x1536_steps35",
         "dataset": "random",
         "task": "t2i",
         "width": 1536,
