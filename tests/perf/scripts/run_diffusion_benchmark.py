@@ -1,18 +1,15 @@
 """
-Performance benchmark CI for Qwen/Qwen-Image text-to-image diffusion model.
+Performance benchmark CI runner for diffusion models.
 
 Supports two server backends:
   - vllm-omni (default): starts DiffusionServer via vllm_omni.entrypoints.cli.main,
     benchmarks with diffusion_benchmark_serving.py --backend vllm-omni
   - sglang: starts SglangServer via `sglang serve`,
-    benchmarks with diffusion_benchmark_serving.py --backend openai
+    benchmarks with diffusion_benchmark_serving.py --backend sglang
 
-Config files (under tests/perf/tests/):
-  - test_qwen_image_vllm_omni.json  ← default
-  - test_qwen_image_sglang.json
-
-Override the config file via --config-file:
-  pytest run_qwen_image_benchmark.py --config-file tests/perf/tests/test_qwen_image_sglang.json
+A config JSON file is REQUIRED via --config-file:
+  pytest run_diffusion_benchmark.py --config-file tests/perf/tests/test_qwen_image_vllm_omni.json
+  pytest run_diffusion_benchmark.py --config-file tests/perf/tests/test_qwen_image_sglang.json
 
 JSON config entries are distinguished by a "server_type" field ("vllm-omni" or "sglang").
 sglang entries support two additional fields under server_params:
@@ -20,10 +17,8 @@ sglang entries support two additional fields under server_params:
   - "cache_dit_config": dict written to a temp YAML and passed as
     --cache-dit-config to sglang serve (requires cache-dit >= 1.2.0)
 
-Results for every run are saved as individual JSON files under BENCHMARK_RESULT_DIR.
-After all tests finish, a cross-backend summary JSON is written to the same directory.
-
-GPU requirement: 4× NVIDIA H100 80 GB
+Results for every run are saved as individual JSON files under BENCHMARK_RESULT_DIR
+(override via the DIFFUSION_BENCHMARK_DIR environment variable).
 """
 
 import json
@@ -55,24 +50,29 @@ BENCHMARK_SCRIPT = str(
     Path(__file__).parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
 )
 
-_DEFAULT_CONFIG_FILE = str(Path(__file__).parent.parent / "tests" / "test_qwen_image_vllm_omni.json")
 
-
-def _get_config_file_from_argv() -> str:
+def _get_config_file_from_argv() -> str | None:
     """Read --config-file from sys.argv at import time so pytest parametrize can use it.
 
     pytest_addoption (below) registers the same flag so pytest does not reject it.
     Supports both ``--config-file path`` and ``--config-file=path`` forms.
+    Returns None if the flag is not present; callers must handle the missing case.
     """
     for i, arg in enumerate(sys.argv):
         if arg == "--config-file" and i + 1 < len(sys.argv):
             return sys.argv[i + 1]
         if arg.startswith("--config-file="):
             return arg.split("=", 1)[1]
-    return _DEFAULT_CONFIG_FILE
+    return None
 
 
 CONFIG_FILE_PATH = _get_config_file_from_argv()
+if CONFIG_FILE_PATH is None:
+    raise ValueError(
+        "--config-file is required. Pass the path to a benchmark config JSON, e.g.:\n"
+        "  pytest run_diffusion_benchmark.py "
+        "--config-file tests/perf/tests/test_qwen_image_vllm_omni.json"
+    )
 
 # ---------------------------------------------------------------------------
 # Config loading
@@ -101,13 +101,13 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--config-file",
         action="store",
-        default=_DEFAULT_CONFIG_FILE,
+        default=None,
         help=(
-            "Path to the benchmark config JSON file. "
-            f"Defaults to test_qwen_image_vllm_omni.json. "
-            "Example: --config-file tests/perf/tests/test_qwen_image_sglang.json"
+            "Path to the benchmark config JSON file (required). "
+            "Example: --config-file tests/perf/tests/test_qwen_image_vllm_omni.json"
         ),
     )
+
 
 _server_lock = threading.Lock()
 
@@ -413,18 +413,19 @@ def _make_server(server_cfg: dict[str, Any]) -> DiffusionServer | SglangServer:
 server_params = _unique_server_params(BENCHMARK_CONFIGS)
 test_param_map = _test_param_mapping(BENCHMARK_CONFIGS)
 
+_seen_indices: set[tuple[str, int]] = set()
 benchmark_indices: list[tuple[str, int]] = []
 for _cfg in BENCHMARK_CONFIGS:
     _name = _cfg["test_name"]
     for _idx in range(len(test_param_map[_name])):
         _entry = (_name, _idx)
-        if _entry not in benchmark_indices:
+        if _entry not in _seen_indices:
+            _seen_indices.add(_entry)
             benchmark_indices.append(_entry)
 
 # ---------------------------------------------------------------------------
 # Pytest fixtures
 # ---------------------------------------------------------------------------
-
 
 
 @pytest.fixture(scope="module")
@@ -531,10 +532,17 @@ def run_benchmark(
         universal_newlines=True,
         cwd=str(Path(__file__).parent.parent.parent.parent),
     )
-    for line in iter(process.stdout.readline, ""):
-        print(line, end="")
-    for line in iter(process.stderr.readline, ""):
-        print(line, end="")
+
+    def _drain(stream) -> None:
+        for line in iter(stream.readline, ""):
+            print(line, end="")
+
+    stdout_thread = threading.Thread(target=_drain, args=(process.stdout,), daemon=True)
+    stderr_thread = threading.Thread(target=_drain, args=(process.stderr,), daemon=True)
+    stdout_thread.start()
+    stderr_thread.start()
+    stdout_thread.join()
+    stderr_thread.join()
     process.wait()
 
     if process.returncode != 0:
@@ -605,8 +613,16 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
 
     print(f"\n{'=' * 60}")
     print(f"Results for {test_name} (server={diffusion_server.server_type}, backend={backend}):")
-    for key in ("throughput_qps", "latency_mean", "latency_median", "latency_p50", "latency_p99",
-                "peak_memory_mb_max", "peak_memory_mb_mean", "peak_memory_mb_median"):
+    for key in (
+        "throughput_qps",
+        "latency_mean",
+        "latency_median",
+        "latency_p50",
+        "latency_p99",
+        "peak_memory_mb_max",
+        "peak_memory_mb_mean",
+        "peak_memory_mb_median",
+    ):
         if key in result:
             print(f"  {key}: {result[key]:.4f}")
 
