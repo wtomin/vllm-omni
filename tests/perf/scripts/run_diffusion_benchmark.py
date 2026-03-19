@@ -79,12 +79,28 @@ if CONFIG_FILE_PATH is None:
 # ---------------------------------------------------------------------------
 
 
+def _resolve_refs(configs: list[dict[str, Any]], config_dir: Path) -> list[dict[str, Any]]:
+    """Resolve {"$ref": "filename.json"} in benchmark_params fields."""
+    for cfg in configs:
+        bp = cfg.get("benchmark_params")
+        if isinstance(bp, dict) and "$ref" in bp:
+            ref_path = config_dir / bp["$ref"]
+            try:
+                with open(ref_path, encoding="utf-8") as f:
+                    cfg["benchmark_params"] = json.load(f)
+            except FileNotFoundError:
+                raise ValueError(f"benchmark_params $ref not found: {ref_path}")
+            except json.JSONDecodeError as e:
+                raise ValueError(f"JSON parsing error in {ref_path}: {e}")
+    return configs
+
+
 def load_configs(config_path: str) -> list[dict[str, Any]]:
     try:
         abs_path = Path(config_path).resolve()
         with open(abs_path, encoding="utf-8") as f:
             configs = json.load(f)
-        return configs
+        return _resolve_refs(configs, abs_path.parent)
     except json.JSONDecodeError as e:
         raise ValueError(f"JSON parsing error: {str(e)}")
     except FileNotFoundError:
