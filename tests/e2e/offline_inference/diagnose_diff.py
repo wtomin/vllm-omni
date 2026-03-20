@@ -1,13 +1,70 @@
 #!/usr/bin/env python3
-"""诊断图像差异 - 找出具体哪些图片差异大"""
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+"""diagnose_diff.py — Image difference diagnostics for compatibility test results.
+
+Compares generated images from one or more feature configs against a reference
+directory (default: ``baseline/``) and reports per-image metrics:
+
+  * MeanDiff   — mean absolute pixel difference (range [0, 1])
+  * MaxDiff    — maximum absolute pixel difference (range [0, 1])
+  * SSIM       — structural similarity index (range [0, 1]; 1 = identical)
+
+Usage:
+  # Single config
+  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel \\
+      --config cfg_parallel
+
+  # Multiple configs at once
+  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel \\
+      --config cfg_parallel cfg_parallel+teacache cfg_parallel+cache_dit
+
+  # All non-baseline configs in the results directory
+  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel --all
+
+  # Use a custom reference directory instead of baseline/
+  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel \\
+      --config cfg_parallel+teacache --reference cfg_parallel
+
+  # Generate an HTML side-by-side report
+  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel \\
+      --all --html
+"""
+
+from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+try:
+    from skimage.metrics import structural_similarity as _ssim
+
+    _HAS_SKIMAGE = True
+except ImportError:
+    _HAS_SKIMAGE = False
+
+# ── ANSI colour helpers ───────────────────────────────────────────────────────
+
+_RED = "\033[31m"
+_YLW = "\033[33m"
+_GRN = "\033[32m"
+_CYN = "\033[36m"
+_RST = "\033[0m"
+_BLD = "\033[1m"
+
+
+def _c(text: str, code: str) -> str:
+    return f"{code}{text}{_RST}"
+
+
+# ── Image helpers ─────────────────────────────────────────────────────────────
 
 
 def load_image(path: Path) -> Image.Image | None:
@@ -17,179 +74,429 @@ def load_image(path: Path) -> Image.Image | None:
         return None
 
 
-def diff_metrics(img_ref: Image.Image, img_test: Image.Image) -> tuple[float, float]:
-    """返回 (mean_abs_diff, max_abs_diff)，范围 [0, 1]"""
-    a = np.asarray(img_ref, dtype=np.float32) / 255.0
-    b_img = img_test
+def diff_metrics(
+    img_ref: Image.Image,
+    img_test: Image.Image,
+) -> tuple[float, float, float]:
+    """Return (mean_abs_diff, max_abs_diff, ssim) all in [0, 1]."""
     if img_ref.size != img_test.size:
-        b_img = img_test.resize(img_ref.size, Image.BILINEAR)
-    b = np.asarray(b_img, dtype=np.float32) / 255.0
+        img_test = img_test.resize(img_ref.size, Image.BILINEAR)
+
+    a = np.asarray(img_ref, dtype=np.float32) / 255.0
+    b = np.asarray(img_test, dtype=np.float32) / 255.0
     diff = np.abs(a - b)
-    return float(diff.mean()), float(diff.max())
+
+    mean_d = float(diff.mean())
+    max_d = float(diff.max())
+
+    ssim_val = float("nan")
+    if _HAS_SKIMAGE:
+        ssim_val = float(_ssim(a, b, data_range=1.0, channel_axis=2, win_size=7))
+
+    return mean_d, max_d, ssim_val
 
 
-def analyze_differences(results_dir: Path, config_name: str):
-    """分析具体哪些图片差异大"""
-    
-    results_dir = Path(results_dir)
-    baseline_dir = results_dir / "baseline"
-    config_dir = results_dir / config_name
-    
-    if not baseline_dir.exists():
-        print(f"错误: baseline 目录不存在: {baseline_dir}")
-        return 1
-    
-    if not config_dir.exists():
-        print(f"错误: 配置目录不存在: {config_dir}")
-        return 1
-    
-    print(f"\n{'='*80}")
-    print(f"诊断图像差异: {config_name}")
-    print(f"{'='*80}\n")
-    
-    # 收集所有图片的差异
+def _status(mean_d: float, max_d: float) -> tuple[str, str]:
+    """Return (label, colour) for a diff measurement."""
+    if max_d > 0.3 or mean_d > 0.05:
+        return "LARGE", _RED
+    if max_d > 0.1 or mean_d > 0.02:
+        return "WARN ", _YLW
+    return "OK   ", _GRN
+
+
+# ── Single-config analysis ────────────────────────────────────────────────────
+
+
+def analyze_config(
+    results_dir: Path,
+    config_name: str,
+    reference_name: str = "baseline",
+) -> dict | None:
+    """Analyze one config against *reference_name* and return a result dict."""
+    ref_dir = results_dir / reference_name
+    cfg_dir = results_dir / config_name
+
+    if not ref_dir.exists():
+        print(f"  {_c('ERROR', _RED)} reference directory not found: {ref_dir}")
+        return None
+    if not cfg_dir.exists():
+        print(f"  {_c('ERROR', _RED)} config directory not found: {cfg_dir}")
+        return None
+
+    diffs: list[dict] = []
     idx = 0
-    diffs = []
-    
     while True:
-        baseline_img_path = baseline_dir / f"prompt_{idx:02d}.png"
-        config_img_path = config_dir / f"prompt_{idx:02d}.png"
-        
-        if not baseline_img_path.exists():
+        ref_path = ref_dir / f"prompt_{idx:02d}.png"
+        tst_path = cfg_dir / f"prompt_{idx:02d}.png"
+        if not ref_path.exists():
             break
-        
-        baseline_img = load_image(baseline_img_path)
-        config_img = load_image(config_img_path)
-        
-        if baseline_img is None or config_img is None:
-            print(f"⚠️  Prompt {idx:02d}: 图片加载失败")
+
+        ref_img = load_image(ref_path)
+        tst_img = load_image(tst_path)
+
+        if ref_img is None or tst_img is None:
+            diffs.append(
+                {
+                    "idx": idx,
+                    "mean_diff": float("nan"),
+                    "max_diff": float("nan"),
+                    "ssim": float("nan"),
+                    "error": "load_failed",
+                    "ref_path": str(ref_path),
+                    "tst_path": str(tst_path),
+                }
+            )
             idx += 1
             continue
-        
-        mean_diff, max_diff = diff_metrics(baseline_img, config_img)
-        diffs.append({
-            "idx": idx,
-            "mean_diff": mean_diff,
-            "max_diff": max_diff,
-            "baseline_path": str(baseline_img_path),
-            "config_path": str(config_img_path),
-        })
-        
+
+        mean_d, max_d, ssim_v = diff_metrics(ref_img, tst_img)
+        diffs.append(
+            {
+                "idx": idx,
+                "mean_diff": mean_d,
+                "max_diff": max_d,
+                "ssim": ssim_v,
+                "ref_path": str(ref_path),
+                "tst_path": str(tst_path),
+            }
+        )
         idx += 1
-    
-    if not diffs:
-        print("没有找到可对比的图片")
-        return 1
-    
-    # 排序并显示
-    print(f"找到 {len(diffs)} 张图片\n")
-    
-    # 按 max_diff 排序
-    sorted_by_max = sorted(diffs, key=lambda x: x["max_diff"], reverse=True)
-    
-    print("按最大像素差异排序（前 10 张）:")
-    print("-" * 80)
-    print(f"{'#':<4} {'Prompt':<10} {'MeanDiff':<12} {'MaxDiff':<12} {'状态':<8}")
-    print("-" * 80)
-    
-    for rank, d in enumerate(sorted_by_max[:10], 1):
-        status = "❌ 大" if d["max_diff"] > 0.2 else "✅ 小"
-        print(f"{rank:<4} prompt_{d['idx']:02d}   {d['mean_diff']:<12.6f} {d['max_diff']:<12.6f} {status}")
-    
-    print("\n" + "=" * 80)
-    print("统计信息:")
+
+    return {"config_name": config_name, "reference": reference_name, "diffs": diffs}
+
+
+# ── Pretty-print one result ───────────────────────────────────────────────────
+
+
+def print_result(result: dict, top_n: int = 10) -> None:
+    config_name = result["config_name"]
+    reference = result["reference"]
+    diffs = result["diffs"]
+
+    print(f"\n{'=' * 80}")
+    print(_c(f"Config: {config_name}  (vs. {reference})", _BLD) + f"  [{len(diffs)} images]")
     print("=" * 80)
-    
-    mean_diffs = [d["mean_diff"] for d in diffs]
-    max_diffs = [d["max_diff"] for d in diffs]
-    
-    print(f"平均差异 (MeanDiff):")
-    print(f"  最小值: {min(mean_diffs):.6f}")
-    print(f"  最大值: {max(mean_diffs):.6f}")
-    print(f"  平均值: {np.mean(mean_diffs):.6f}")
-    print(f"  中位数: {np.median(mean_diffs):.6f}")
-    
-    print(f"\n最大差异 (MaxDiff):")
-    print(f"  最小值: {min(max_diffs):.6f}")
-    print(f"  最大值: {max(max_diffs):.6f}")
-    print(f"  平均值: {np.mean(max_diffs):.6f}")
-    print(f"  中位数: {np.median(max_diffs):.6f}")
-    
-    # 统计超过阈值的图片
-    high_max_diff = [d for d in diffs if d["max_diff"] > 0.2]
-    high_mean_diff = [d for d in diffs if d["mean_diff"] > 0.02]
-    
-    print(f"\n超过阈值的图片:")
-    print(f"  MaxDiff > 0.2:  {len(high_max_diff)} / {len(diffs)} ({len(high_max_diff)/len(diffs)*100:.1f}%)")
-    print(f"  MeanDiff > 0.02: {len(high_mean_diff)} / {len(diffs)} ({len(high_mean_diff)/len(diffs)*100:.1f}%)")
-    
-    if high_max_diff:
-        print(f"\nMaxDiff 超过阈值的图片索引: {[d['idx'] for d in high_max_diff]}")
-    
-    # 保存详细报告
-    report_path = results_dir / f"diff_diagnosis_{config_name}.json"
-    with open(report_path, "w") as f:
-        json.dump({
-            "config_name": config_name,
-            "total_images": len(diffs),
-            "statistics": {
-                "mean_diff": {
-                    "min": float(min(mean_diffs)),
-                    "max": float(max(mean_diffs)),
-                    "avg": float(np.mean(mean_diffs)),
-                    "median": float(np.median(mean_diffs)),
-                },
-                "max_diff": {
-                    "min": float(min(max_diffs)),
-                    "max": float(max(max_diffs)),
-                    "avg": float(np.mean(max_diffs)),
-                    "median": float(np.median(max_diffs)),
-                },
-            },
-            "high_diff_images": [
-                {
-                    "idx": d["idx"],
-                    "mean_diff": d["mean_diff"],
-                    "max_diff": d["max_diff"],
-                }
-                for d in sorted_by_max if d["max_diff"] > 0.2
-            ],
-            "all_diffs": diffs,
-        }, f, indent=2)
-    
-    print(f"\n详细报告已保存到: {report_path}")
-    print("=" * 80 + "\n")
-    
+
+    if not diffs:
+        print("  No comparable images found.")
+        return
+
+    valid = [d for d in diffs if "error" not in d]
+    errors = [d for d in diffs if "error" in d]
+
+    if errors:
+        print(f"  {_c(f'{len(errors)} image(s) failed to load', _RED)}")
+
+    if not valid:
+        return
+
+    # Per-image table sorted by max_diff
+    sorted_by_max = sorted(valid, key=lambda x: x["max_diff"], reverse=True)
+
+    ssim_col = "SSIM  " if _HAS_SKIMAGE else "SSIM  "
+    hdr = f"{'#':<4} {'Prompt':<10} {'MeanDiff':<12} {'MaxDiff':<12} {ssim_col:<10} Status"
+    print(f"\n  Top {min(top_n, len(sorted_by_max))} by MaxDiff:")
+    print("  " + "-" * (len(hdr)))
+    print("  " + hdr)
+    print("  " + "-" * (len(hdr)))
+    for rank, d in enumerate(sorted_by_max[:top_n], 1):
+        label, colour = _status(d["mean_diff"], d["max_diff"])
+        ssim_str = f"{d['ssim']:.4f}" if not np.isnan(d["ssim"]) else "  n/a  "
+        print(
+            f"  {rank:<4} prompt_{d['idx']:02d}   "
+            f"{d['mean_diff']:<12.6f} {d['max_diff']:<12.6f} {ssim_str:<10} " + _c(label, colour)
+        )
+
+    # Statistics
+    mean_diffs = [d["mean_diff"] for d in valid]
+    max_diffs = [d["max_diff"] for d in valid]
+    ssims = [d["ssim"] for d in valid if not np.isnan(d["ssim"])]
+
+    print(f"\n  {'─' * 40}")
+    print("  Statistics:")
+    print(
+        f"    MeanDiff — min={min(mean_diffs):.6f}  max={max(mean_diffs):.6f}"
+        f"  avg={np.mean(mean_diffs):.6f}  median={np.median(mean_diffs):.6f}"
+    )
+    print(
+        f"    MaxDiff  — min={min(max_diffs):.6f}  max={max(max_diffs):.6f}"
+        f"  avg={np.mean(max_diffs):.6f}  median={np.median(max_diffs):.6f}"
+    )
+    if ssims:
+        print(
+            f"    SSIM     — min={min(ssims):.4f}  max={max(ssims):.4f}"
+            f"  avg={np.mean(ssims):.4f}  median={np.median(ssims):.4f}"
+        )
+
+    n_large = sum(1 for d in valid if d["max_diff"] > 0.3 or d["mean_diff"] > 0.05)
+    n_warn = sum(1 for d in valid if 0.1 < d["max_diff"] <= 0.3 or 0.02 < d["mean_diff"] <= 0.05)
+    n_ok = len(valid) - n_large - n_warn
+    print(
+        "\n  Verdict: "
+        + _c(f"{n_ok} OK", _GRN)
+        + " / "
+        + _c(f"{n_warn} WARN", _YLW)
+        + " / "
+        + _c(f"{n_large} LARGE", _RED)
+        + f" (out of {len(valid)} images)"
+    )
+
+
+# ── Summary comparison table (multiple configs) ───────────────────────────────
+
+
+def print_summary(results: list[dict]) -> None:
+    print(f"\n{'=' * 80}")
+    print(_c("SUMMARY — all configs vs. reference", _BLD))
+    print("=" * 80)
+
+    hdr = f"  {'Config':<40} {'Ref':<12} {'AvgMean':<12} {'AvgMax':<12} {'AvgSSIM':<10} {'OK/WARN/LARGE'}"
+    print(hdr)
+    print("  " + "-" * (len(hdr) - 2))
+
+    for r in results:
+        valid = [d for d in r["diffs"] if "error" not in d]
+        if not valid:
+            print(f"  {r['config_name']:<40} (no valid images)")
+            continue
+        avg_mean = np.mean([d["mean_diff"] for d in valid])
+        avg_max = np.mean([d["max_diff"] for d in valid])
+        ssims = [d["ssim"] for d in valid if not np.isnan(d["ssim"])]
+        avg_ssim = np.mean(ssims) if ssims else float("nan")
+
+        n_large = sum(1 for d in valid if d["max_diff"] > 0.3 or d["mean_diff"] > 0.05)
+        n_warn = sum(1 for d in valid if 0.1 < d["max_diff"] <= 0.3 or 0.02 < d["mean_diff"] <= 0.05)
+        n_ok = len(valid) - n_large - n_warn
+
+        ssim_str = f"{avg_ssim:.4f}" if not np.isnan(avg_ssim) else " n/a  "
+        verdict = _c(f"{n_ok}✓", _GRN) + " / " + _c(f"{n_warn}⚠", _YLW) + " / " + _c(f"{n_large}✗", _RED)
+        print(
+            f"  {r['config_name']:<40} {r['reference']:<12} {avg_mean:<12.6f} {avg_max:<12.6f} {ssim_str:<10} {verdict}"
+        )
+
+
+# ── HTML side-by-side report ──────────────────────────────────────────────────
+
+
+def _img_to_b64(path: Path) -> str:
+    try:
+        buf = BytesIO()
+        Image.open(path).convert("RGB").save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        return ""
+
+
+def write_html_report(results: list[dict], out_path: Path) -> None:
+    """Write an HTML report with inline base-64 images."""
+    rows_html = []
+    for r in results:
+        config_name = r["config_name"]
+        valid = [d for d in r["diffs"] if "error" not in d]
+        if not valid:
+            continue
+
+        sorted_diffs = sorted(valid, key=lambda x: x["max_diff"], reverse=True)
+
+        for d in sorted_diffs:
+            ref_b64 = _img_to_b64(Path(d["ref_path"]))
+            tst_b64 = _img_to_b64(Path(d["tst_path"]))
+            label, _ = _status(d["mean_diff"], d["max_diff"])
+            colour_map = {"LARGE": "#f44336", "WARN ": "#ff9800", "OK   ": "#4caf50"}
+            bg = colour_map.get(label, "#ffffff")
+            ssim_str = f"{d['ssim']:.4f}" if not np.isnan(d["ssim"]) else "n/a"
+            rows_html.append(f"""
+            <tr>
+              <td>{config_name}</td>
+              <td>prompt_{d["idx"]:02d}</td>
+              <td style="background:{bg};color:#fff;font-weight:bold">{label.strip()}</td>
+              <td>{d["mean_diff"]:.6f}</td>
+              <td>{d["max_diff"]:.6f}</td>
+              <td>{ssim_str}</td>
+              <td>{'<img src="data:image/png;base64,' + ref_b64 + '" width="200">' if ref_b64 else "(missing)"}</td>
+              <td>{'<img src="data:image/png;base64,' + tst_b64 + '" width="200">' if tst_b64 else "(missing)"}</td>
+            </tr>""")
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Diff Diagnosis Report</title>
+  <style>
+    body {{ font-family: monospace; padding: 1em; }}
+    table {{ border-collapse: collapse; width: 100%; }}
+    th, td {{ border: 1px solid #ccc; padding: 6px 10px; vertical-align: top; }}
+    th {{ background: #333; color: #fff; }}
+    tr:nth-child(even) {{ background: #f9f9f9; }}
+    img {{ display: block; max-width: 200px; }}
+  </style>
+</head>
+<body>
+  <h1>Diff Diagnosis Report</h1>
+  <p>SSIM available: {"yes (skimage)" if _HAS_SKIMAGE else "no (pip install scikit-image)"}</p>
+  <table>
+    <thead>
+      <tr>
+        <th>Config</th><th>Prompt</th><th>Status</th>
+        <th>MeanDiff</th><th>MaxDiff</th><th>SSIM</th>
+        <th>Reference</th><th>Test</th>
+      </tr>
+    </thead>
+    <tbody>
+      {"".join(rows_html)}
+    </tbody>
+  </table>
+</body>
+</html>"""
+
+    out_path.write_text(html, encoding="utf-8")
+    print(f"\n  HTML report → {out_path}")
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Diagnose image differences between feature configs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    p.add_argument(
+        "--results-dir",
+        required=True,
+        help="Results directory (contains baseline/ and config subdirectories).",
+    )
+    p.add_argument(
+        "--config",
+        nargs="*",
+        default=[],
+        metavar="CONFIG",
+        help="One or more config names to diagnose (e.g. cfg_parallel cfg_parallel+teacache).",
+    )
+    p.add_argument(
+        "--all",
+        action="store_true",
+        help="Diagnose ALL non-reference subdirectories found under --results-dir.",
+    )
+    p.add_argument(
+        "--reference",
+        default="baseline",
+        help="Reference config name to compare against (default: baseline).",
+    )
+    p.add_argument(
+        "--top",
+        type=int,
+        default=10,
+        help="Number of worst-diff images to show per config (default: 10).",
+    )
+    p.add_argument(
+        "--html",
+        action="store_true",
+        help="Write an HTML side-by-side report to <results-dir>/diff_report.html.",
+    )
+    p.add_argument(
+        "--save-json",
+        action="store_true",
+        help="Save a JSON report for each analyzed config.",
+    )
+    return p.parse_args()
+
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+
+def main() -> int:
+    args = _parse_args()
+    results_dir = Path(args.results_dir)
+
+    if not results_dir.exists():
+        print(f"[ERROR] Results directory not found: {results_dir}", file=sys.stderr)
+        return 1
+
+    # Collect config names to analyze
+    configs_to_analyze: list[str] = list(args.config)
+    if args.all:
+        discovered = sorted(
+            d.name
+            for d in results_dir.iterdir()
+            if d.is_dir() and d.name != args.reference and not d.name.startswith(".") and not d.name.endswith(".json")
+        )
+        configs_to_analyze = list(dict.fromkeys(configs_to_analyze + discovered))
+
+    if not configs_to_analyze:
+        print(
+            "[ERROR] No configs specified. Use --config <name> or --all.",
+            file=sys.stderr,
+        )
+        return 1
+
+    if not _HAS_SKIMAGE:
+        print("[WARN] scikit-image not found; SSIM metric disabled. Install with: pip install scikit-image")
+
+    all_results: list[dict] = []
+    for cfg in configs_to_analyze:
+        result = analyze_config(results_dir, cfg, reference_name=args.reference)
+        if result is not None:
+            all_results.append(result)
+            print_result(result, top_n=args.top)
+
+            if args.save_json:
+                json_path = results_dir / f"diff_diagnosis_{cfg}.json"
+                _save_json(result, json_path)
+                print(f"  JSON report → {json_path}")
+
+    if len(all_results) > 1:
+        print_summary(all_results)
+
+    if args.html and all_results:
+        html_path = results_dir / "diff_report.html"
+        write_html_report(all_results, html_path)
+
     return 0
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="诊断具体哪些图片差异大",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  # 诊断 cfg_parallel 配置
-  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel --config cfg_parallel
-  
-  # 对比多个配置
-  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel --config cfg_parallel
-  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel --config cfg_parallel+teacache
-""",
-    )
-    parser.add_argument(
-        "--results-dir",
-        required=True,
-        help="结果目录路径（包含 baseline/ 和配置目录）",
-    )
-    parser.add_argument(
-        "--config",
-        required=True,
-        help="要诊断的配置名称（如 cfg_parallel）",
-    )
-    
-    args = parser.parse_args()
-    return analyze_differences(Path(args.results_dir), args.config)
+def _save_json(result: dict, path: Path) -> None:
+    valid = [d for d in result["diffs"] if "error" not in d]
+    mean_diffs = [d["mean_diff"] for d in valid]
+    max_diffs = [d["max_diff"] for d in valid]
+    ssims = [d["ssim"] for d in valid if not np.isnan(d["ssim"])]
+
+    payload = {
+        "config_name": result["config_name"],
+        "reference": result["reference"],
+        "total_images": len(result["diffs"]),
+        "valid_images": len(valid),
+        "ssim_available": _HAS_SKIMAGE,
+        "statistics": {
+            "mean_diff": {
+                "min": float(min(mean_diffs)) if mean_diffs else None,
+                "max": float(max(mean_diffs)) if mean_diffs else None,
+                "avg": float(np.mean(mean_diffs)) if mean_diffs else None,
+                "median": float(np.median(mean_diffs)) if mean_diffs else None,
+            },
+            "max_diff": {
+                "min": float(min(max_diffs)) if max_diffs else None,
+                "max": float(max(max_diffs)) if max_diffs else None,
+                "avg": float(np.mean(max_diffs)) if max_diffs else None,
+                "median": float(np.median(max_diffs)) if max_diffs else None,
+            },
+            "ssim": {
+                "min": float(min(ssims)) if ssims else None,
+                "max": float(max(ssims)) if ssims else None,
+                "avg": float(np.mean(ssims)) if ssims else None,
+                "median": float(np.median(ssims)) if ssims else None,
+            },
+        },
+        "high_diff_images": [
+            {"idx": d["idx"], "mean_diff": d["mean_diff"], "max_diff": d["max_diff"], "ssim": d["ssim"]}
+            for d in sorted(valid, key=lambda x: x["max_diff"], reverse=True)
+            if d["max_diff"] > 0.1
+        ],
+        "all_diffs": result["diffs"],
+    }
+    path.write_text(json.dumps(payload, indent=2, allow_nan=True), encoding="utf-8")
 
 
 if __name__ == "__main__":
