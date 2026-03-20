@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """run_compat_test.py — Feature compatibility test runner (Python)
 
-Uses batch_text_to_image.py for efficient batch processing with a structured 
+Uses batch_text_to_image.py for efficient batch processing with a structured
 two-level test matrix:
 
   Baseline 1  : pure baseline — no acceleration features
@@ -20,6 +20,21 @@ Each run saves:
 
 Note: Individual prompt_NN.log files are not created; all logs are in batch_generation.log
 
+Supported features (13 total across 4 categories):
+  Acceleration (cache):  teacache, cache_dit
+  Parallelism:           cfg_parallel, ulysses, ring, tp, hsdp
+  Memory optimization:   cpu_offload, layerwise_offload, vae_patch_parallel(*), fp8, gguf
+  Extensions:            lora
+
+  (*) vae_patch_parallel is addon-only: must be stacked on top of a parallel baseline
+  (tp/cfg_parallel/ulysses/ring) and its size must match that baseline's parallel degree.
+
+GPU requirements:
+  Maximum 2 GPUs required for any single feature or combination.
+  All parallel features use gpu_multiplier=2 (i.e. exactly 2 GPUs).
+  Single-GPU features (cache, quantization, CPU offload, LoRA) use gpu_multiplier=1.
+  vae_patch_parallel reuses the GPUs already allocated by its baseline (gpu_multiplier=1).
+
 Usage:
   python run_compat_test.py \\
       --baseline-feature cfg_parallel \\
@@ -30,6 +45,12 @@ Usage:
       --num-prompts 20 \\
       --prompt-file ./prompts.txt
 
+  # Test LoRA (requires a valid adapter path)
+  python run_compat_test.py \\
+      --baseline-feature lora \\
+      --lora-path /path/to/my/lora_adapter \\
+      --model Tongyi-MAI/Z-Image-Turbo
+
   python analyze_compat_results.py \\
       --results-dir ./compat_results/cfg_parallel \\
       --charts
@@ -38,8 +59,10 @@ Extending the feature registry:
   Add a new entry to FEATURE_REGISTRY with:
     args            : list of CLI tokens passed to batch_text_to_image.py
     gpu_multiplier  : parallel dimension (1 = no extra GPUs, 2 = doubles GPU count, …)
-    lossy           : True if the feature may degrade image quality (cache-based methods)
+    lossy           : True if the feature may degrade image quality (cache/quant methods)
     label           : human-readable display name for reports/charts
+    category        : one of acceleration / parallelism / memory / extension
+    note            : short description / compatibility notes
 """
 
 from __future__ import annotations
@@ -60,43 +83,186 @@ from pathlib import Path
 # lossy: True if this feature trades quality for speed (cache methods).
 
 FEATURE_REGISTRY: dict[str, dict] = {
-    "cfg_parallel": {
-        "args": ["--cfg-parallel-size", "2"],
-        "gpu_multiplier": 2,
-        "lossy": False,
-        "label": "CFG-Parallel (×2)",
-    },
+    # ── Acceleration: cache methods (lossy) ──────────────────────────────────
     "teacache": {
         "args": ["--cache-backend", "tea_cache"],
         "gpu_multiplier": 1,
         "lossy": True,
         "label": "TeaCache",
+        "category": "acceleration",
+        "note": "Adaptive caching using modulated inputs. Minor quality trade-off.",
     },
     "cache_dit": {
         "args": ["--cache-backend", "cache_dit"],
         "gpu_multiplier": 1,
         "lossy": True,
         "label": "Cache-DiT",
+        "category": "acceleration",
+        "note": "DBCache + TaylorSeer + SCM caching. Not compatible with teacache.",
+    },
+    # ── Acceleration: parallelism methods (lossless) ─────────────────────────
+    "cfg_parallel": {
+        "args": ["--cfg-parallel-size", "2"],
+        "gpu_multiplier": 2,
+        "lossy": False,
+        "label": "CFG-Parallel (×2)",
+        "category": "parallelism",
+        "note": "Splits CFG positive/negative branches across 2 GPUs.",
     },
     "ulysses": {
         "args": ["--ulysses-degree", "2"],
         "gpu_multiplier": 2,
         "lossy": False,
         "label": "Ulysses SP (×2)",
+        "category": "parallelism",
+        "note": "Sequence parallelism via all-to-all communication. Lossless.",
     },
     "ring": {
         "args": ["--ring-degree", "2"],
         "gpu_multiplier": 2,
         "lossy": False,
         "label": "Ring SP (×2)",
+        "category": "parallelism",
+        "note": "Sequence parallelism via ring-based communication. Lossless.",
     },
     "tp": {
         "args": ["--tensor-parallel-size", "2"],
         "gpu_multiplier": 2,
         "lossy": False,
         "label": "Tensor Parallel (×2)",
+        "category": "parallelism",
+        "note": "Shards model weights across 2 GPUs. Not compatible with hsdp.",
+    },
+    "hsdp": {
+        "args": ["--use-hsdp", "--hsdp-shard-size", "2"],
+        "gpu_multiplier": 2,
+        "lossy": False,
+        "label": "HSDP (shard×2)",
+        "category": "parallelism",
+        "note": (
+            "Weight sharding via FSDP2, redistributed on-demand at runtime. "
+            "Not compatible with tp/dp. Best for large models (14B+)."
+        ),
+    },
+    # ── Memory optimization ───────────────────────────────────────────────────
+    "cpu_offload": {
+        "args": ["--enable-cpu-offload"],
+        "gpu_multiplier": 1,
+        "lossy": False,
+        "label": "CPU Offload (Module-level)",
+        "category": "memory",
+        "note": "Offloads DiT + text encoder to CPU. Single-card only.",
+    },
+    "layerwise_offload": {
+        "args": ["--enable-layerwise-offload"],
+        "gpu_multiplier": 1,
+        "lossy": False,
+        "label": "CPU Offload (Layerwise)",
+        "category": "memory",
+        "note": "Keeps only one transformer block on GPU at a time. Single-card only.",
+    },
+    "vae_patch_parallel": {
+        "args": ["--vae-patch-parallel-size", "2"],
+        "gpu_multiplier": 1,
+        "lossy": False,
+        "label": "VAE Patch Parallel (×2)",
+        "category": "memory",
+        "addon_only": True,
+        "note": (
+            "Must be used as an addon on top of a parallel baseline (tp, cfg_parallel, ulysses, ring). "
+            "--vae-patch-parallel-size must equal the product of the baseline's parallel sizes. "
+            "Does not add extra GPUs — reuses GPUs already allocated by the baseline."
+        ),
+    },
+    "fp8": {
+        "args": ["--quantization", "fp8"],
+        "gpu_multiplier": 1,
+        "lossy": True,
+        "label": "FP8 Quantization",
+        "category": "memory",
+        "note": "FP8 W8A8 on Ada/Hopper GPUs, weight-only on older hardware.",
+    },
+    "gguf": {
+        "args": ["--quantization", "gguf"],
+        "gpu_multiplier": 1,
+        "lossy": True,
+        "label": "GGUF Quantization",
+        "category": "memory",
+        "note": "Native GGUF transformer-only weights (Q4, Q8, etc.). Not compatible with fp8.",
+    },
+    # ── Extensions ────────────────────────────────────────────────────────────
+    "lora": {
+        "args": ["--lora-path", ""],
+        "gpu_multiplier": 1,
+        "lossy": False,
+        "label": "LoRA Inference",
+        "category": "extension",
+        "note": (
+            "Low-Rank Adaptation inference. Requires --lora-path to a valid adapter directory. "
+            "Override the empty string via: FEATURE_REGISTRY['lora']['args'][1] = '/path/to/adapter'"
+        ),
     },
 }
+
+# ── Conflict rules ────────────────────────────────────────────────────────────
+#
+# CONFLICT_RULES: pairwise feature combinations that must never run together.
+# Each entry is (feature_a, feature_b, reason).
+# A config is SKIPPED (not failed) when both features are active simultaneously.
+#
+# SINGLE_CARD_ONLY: features restricted to a single GPU.
+# They conflict with any feature whose gpu_multiplier > 1.
+
+CONFLICT_RULES: list[tuple[str, str, str]] = [
+    (
+        "tp",
+        "hsdp",
+        "Tensor Parallel and HSDP are not compatible",
+    ),
+    (
+        "teacache",
+        "cache_dit",
+        "TeaCache and Cache-DiT are not compatible",
+    ),
+    (
+        "layerwise_offload",
+        "cpu_offload",
+        "Layerwise CPU offloading and module-level CPU offloading are not compatible",
+    ),
+    (
+        "fp8",
+        "gguf",
+        "FP8 quantization and GGUF quantization are not compatible",
+    ),
+]
+
+# Features that only support single-card execution.
+# They implicitly conflict with every feature whose gpu_multiplier > 1.
+SINGLE_CARD_ONLY: frozenset[str] = frozenset({"layerwise_offload"})
+
+
+def check_conflicts(features: list[str]) -> str | None:
+    """Return a human-readable conflict reason if the feature combination is invalid.
+
+    Returns None when the combination is valid.
+    Checks:
+      1. Pairwise incompatibilities defined in CONFLICT_RULES.
+      2. Single-card-only features combined with any multi-GPU feature.
+    """
+    feature_set = set(features)
+
+    for fa, fb, reason in CONFLICT_RULES:
+        if fa in feature_set and fb in feature_set:
+            return reason
+
+    for f in features:
+        if f in SINGLE_CARD_ONLY:
+            multi_gpu = [g for g in features if g != f and FEATURE_REGISTRY[g]["gpu_multiplier"] > 1]
+            if multi_gpu:
+                return f"'{f}' supports single-card only and cannot be combined with multi-GPU feature(s): {multi_gpu}"
+
+    return None
+
 
 NEGATIVE_PROMPT = "low quality, blurry, distorted, watermark, noise"
 
@@ -155,6 +321,7 @@ def build_configs(baseline_feature: str, addons: list[str]) -> list[dict]:
     ----------
     baseline_feature:
         Key from FEATURE_REGISTRY used as the primary feature under test.
+        Must not be an ``addon_only`` feature (e.g. vae_patch_parallel).
     addons:
         Zero or more additional feature keys to stack on top of the baseline.
 
@@ -166,10 +333,19 @@ def build_configs(baseline_feature: str, addons: list[str]) -> list[dict]:
     if unknown:
         raise ValueError(f"Unknown features: {unknown}\nAvailable: {sorted(FEATURE_REGISTRY)}")
 
+    if FEATURE_REGISTRY[baseline_feature].get("addon_only"):
+        addon_only_features = [k for k, v in FEATURE_REGISTRY.items() if v.get("addon_only")]
+        raise ValueError(
+            f"'{baseline_feature}' is addon-only and cannot be used as --baseline-feature.\n"
+            f"Addon-only features: {addon_only_features}\n"
+            f"Use it in --addons instead, e.g.:\n"
+            f"  --baseline-feature tp --addons {baseline_feature}"
+        )
+
     bf = FEATURE_REGISTRY[baseline_feature]
     configs: list[dict] = []
 
-    # Baseline 1 — no features
+    # Baseline 1 — no features (never conflicts)
     configs.append(
         {
             "name": "baseline",
@@ -178,6 +354,7 @@ def build_configs(baseline_feature: str, addons: list[str]) -> list[dict]:
             "args": [],
             "gpu_req": 1,
             "lossy": False,
+            "skip_reason": None,
         }
     )
 
@@ -190,21 +367,24 @@ def build_configs(baseline_feature: str, addons: list[str]) -> list[dict]:
             "args": list(bf["args"]),
             "gpu_req": bf["gpu_multiplier"],
             "lossy": bf["lossy"],
+            "skip_reason": check_conflicts([baseline_feature]),
         }
     )
 
     # Addons — baseline feature + one addon each
     for addon in addons:
         af = FEATURE_REGISTRY[addon]
+        combo = [baseline_feature, addon]
         gpu_req = bf["gpu_multiplier"] * af["gpu_multiplier"]
         configs.append(
             {
                 "name": f"{baseline_feature}+{addon}",
                 "role": "addon",
-                "features": [baseline_feature, addon],
+                "features": combo,
                 "args": list(bf["args"]) + list(af["args"]),
                 "gpu_req": gpu_req,
                 "lossy": bf["lossy"] or af["lossy"],
+                "skip_reason": check_conflicts(combo),
             }
         )
 
@@ -320,7 +500,7 @@ def run_batch_prompts(
     # Save batch log
     batch_log_path = cfg_dir / "batch_generation.log"
     batch_log_path.write_bytes(result.stdout)
-    
+
     # Save batch exit code
     batch_rc_path = cfg_dir / "batch_generation.exitcode"
     batch_rc_path.write_text(str(rc))
@@ -331,7 +511,7 @@ def run_batch_prompts(
         for ln in tail:
             print(f"      │ {ln}")
         return 0, num_prompts
-    
+
     # Rename generated images from image_NNNN.png to prompt_NN.png
     # and create minimal metadata files for compatibility with analyze script
     n_ok = 0
@@ -340,7 +520,7 @@ def run_batch_prompts(
         src_img = cfg_dir / f"image_{idx:04d}.png"
         dst_img = cfg_dir / f"prompt_{idx:02d}.png"
         rc_path = cfg_dir / f"prompt_{idx:02d}.exitcode"
-        
+
         if src_img.exists():
             src_img.rename(dst_img)
             rc_path.write_text("0")
@@ -350,7 +530,7 @@ def run_batch_prompts(
             n_fail += 1
 
     _log(f"Batch completed: {n_ok} OK / {n_fail} FAIL in {elapsed_ms:.0f}ms", "OK" if n_fail == 0 else "WARN")
-    
+
     return n_ok, n_fail
 
 
@@ -475,6 +655,16 @@ def _parse_args() -> argparse.Namespace:
         help="Number of prompts to use (taken from the top of --prompt-file).",
     )
     p.add_argument(
+        "--lora-path",
+        default="",
+        metavar="PATH",
+        help=(
+            "Path to a LoRA adapter directory.  Required when --baseline-feature lora "
+            "or lora is listed in --addons.  Automatically injected into the 'lora' "
+            "feature's args at runtime."
+        ),
+    )
+    p.add_argument(
         "--dry-run",
         action="store_true",
         help="Print commands without executing them.",
@@ -487,6 +677,16 @@ def _parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = _parse_args()
+
+    # Inject --lora-path into the lora feature args at runtime
+    if args.lora_path:
+        FEATURE_REGISTRY["lora"]["args"] = ["--lora-path", args.lora_path]
+    elif "lora" in ([args.baseline_feature] + (args.addons or [])):
+        print(
+            "[WARN] 'lora' feature selected but --lora-path is empty. "
+            "Pass --lora-path /path/to/adapter or the lora run will fail.",
+            file=sys.stderr,
+        )
 
     # Locate batch_text_to_image.py relative to this script's repo root
     script_dir = Path(__file__).resolve().parent
@@ -538,15 +738,26 @@ def main() -> int:
 
         write_manifest(row_dir, args.baseline_feature, args.addons or [], configs, args, gpu_count)
 
-        total_ok = total_fail = total_skip = 0
+        total_ok = total_fail = 0
+        total_skip_conflict = total_skip_gpu = 0
 
         for cfg in configs:
+            # ── Skip: known feature conflict ──────────────────────────────────
+            if cfg["skip_reason"]:
+                _log(
+                    f"SKIP '{cfg['name']}' — {cfg['skip_reason']}",
+                    "WARN",
+                )
+                total_skip_conflict += 1
+                continue
+
+            # ── Skip: insufficient GPUs ───────────────────────────────────────
             if cfg["gpu_req"] > gpu_count:
                 _log(
                     f"SKIP '{cfg['name']}' — requires {cfg['gpu_req']} GPUs, only {gpu_count} available",
                     "WARN",
                 )
-                total_skip += 1
+                total_skip_gpu += 1
                 continue
 
             cfg_dir = row_dir / cfg["name"]
@@ -558,13 +769,16 @@ def main() -> int:
         temp_prompt_file.unlink(missing_ok=True)
 
     # Final summary
+    total_skip = total_skip_conflict + total_skip_gpu
     print()
     print("=" * 72)
     print("  RUN COMPLETE")
     print(f"  Baseline feature : {args.baseline_feature}")
     print(f"  OK               : {total_ok}")
     print(f"  FAIL             : {total_fail}")
-    print(f"  SKIP             : {total_skip}  (configs, not prompts)")
+    print(f"  SKIP (conflict)  : {total_skip_conflict}  (incompatible feature pairs)")
+    print(f"  SKIP (GPU)       : {total_skip_gpu}  (insufficient GPUs)")
+    print(f"  SKIP total       : {total_skip}  (configs, not prompts)")
     print(f"  Output           : {row_dir}")
     print("=" * 72)
     print()

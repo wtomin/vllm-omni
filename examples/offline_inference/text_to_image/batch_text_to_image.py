@@ -121,10 +121,13 @@ def parse_args() -> argparse.Namespace:
         "--quantization",
         type=str,
         default=None,
-        choices=["fp8"],
-        help="Quantization method for the transformer. "
-        "Options: 'fp8' (FP8 W8A8 on Ada/Hopper, weight-only on older GPUs). "
-        "Default: None (no quantization, uses BF16).",
+        choices=["fp8", "gguf"],
+        help=(
+            "Quantization method for the transformer. "
+            "'fp8': FP8 W8A8 on Ada/Hopper, weight-only on older GPUs. "
+            "'gguf': Native GGUF transformer-only weights (Q4, Q8, etc.). "
+            "Default: None (no quantization, uses BF16)."
+        ),
     )
     parser.add_argument(
         "--ignored-layers",
@@ -157,13 +160,68 @@ def parse_args() -> argparse.Namespace:
         default=1,
         help="Number of ranks used for VAE patch/tile parallelism (decode/encode).",
     )
+    # ── HSDP ──────────────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--use-hsdp",
+        action="store_true",
+        help=(
+            "Enable Hybrid Sharded Data Parallel (HSDP) for weight sharding via FSDP2. "
+            "Not compatible with --tensor-parallel-size > 1 or data parallelism."
+        ),
+    )
+    parser.add_argument(
+        "--hsdp-shard-size",
+        type=int,
+        default=-1,
+        help=(
+            "Number of GPUs to shard weights across within each HSDP replica group. "
+            "-1 means auto-calculate from world size (requires other parallelism). "
+            "Only used when --use-hsdp is set."
+        ),
+    )
+    parser.add_argument(
+        "--hsdp-replicate-size",
+        type=int,
+        default=1,
+        help=(
+            "Number of HSDP replica groups. Each replica holds a full sharded copy. "
+            "Total GPUs for HSDP = hsdp-shard-size × hsdp-replicate-size. "
+            "Only used when --use-hsdp is set."
+        ),
+    )
+    # ── Expert Parallelism ────────────────────────────────────────────────────
+    parser.add_argument(
+        "--enable-expert-parallel",
+        action="store_true",
+        help=(
+            "Enable expert parallelism for MoE diffusion models (e.g. HunyuanImage-3.0). "
+            "TP is still used for non-MoE layers; requires --tensor-parallel-size ≥ 2."
+        ),
+    )
+    # ── LoRA Inference ────────────────────────────────────────────────────────
+    parser.add_argument(
+        "--lora-path",
+        type=str,
+        default=None,
+        help=(
+            "Path to a LoRA adapter directory containing adapter_model.safetensors "
+            "and adapter_config.json.  When set, LoRA weights are applied to every "
+            "generation request in the batch."
+        ),
+    )
+    parser.add_argument(
+        "--lora-scale",
+        type=float,
+        default=1.0,
+        help="Scaling factor for the LoRA adapter weights.  Only used when --lora-path is set.",
+    )
     return parser.parse_args()
 
 
 def read_prompts_from_file(filepath: str) -> list[str]:
     """Read prompts from a text file, one prompt per line."""
     prompts = []
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if line:
@@ -173,20 +231,20 @@ def read_prompts_from_file(filepath: str) -> list[str]:
 
 def main():
     args = parse_args()
-    
+
     # Read prompts from file
     prompt_file_path = Path(args.prompt_file)
     if not prompt_file_path.exists():
         raise FileNotFoundError(f"Prompt file not found: {args.prompt_file}")
-    
+
     prompts = read_prompts_from_file(args.prompt_file)
     if not prompts:
         raise ValueError(f"No prompts found in file: {args.prompt_file}")
-    
+
     print(f"\n{'=' * 60}")
     print(f"Loaded {len(prompts)} prompts from {args.prompt_file}")
     print(f"{'=' * 60}\n")
-    
+
     # Create output directory
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -221,6 +279,10 @@ def main():
         cfg_parallel_size=args.cfg_parallel_size,
         tensor_parallel_size=args.tensor_parallel_size,
         vae_patch_parallel_size=args.vae_patch_parallel_size,
+        enable_expert_parallel=args.enable_expert_parallel,
+        use_hsdp=args.use_hsdp,
+        hsdp_shard_size=args.hsdp_shard_size,
+        hsdp_replicate_size=args.hsdp_replicate_size,
     )
 
     # Check if profiling is requested via environment variable
@@ -236,6 +298,19 @@ def main():
         }
     elif args.quantization:
         quant_kwargs["quantization"] = args.quantization
+
+    # Build LoRA request if --lora-path is provided
+    lora_request = None
+    if args.lora_path:
+        from vllm_omni.lora.request import LoRARequest
+        from vllm_omni.lora.utils import stable_lora_int_id
+
+        lora_request = LoRARequest(
+            lora_name="batch_lora",
+            lora_int_id=stable_lora_int_id(args.lora_path),
+            lora_path=args.lora_path,
+        )
+        logger.info("LoRA adapter loaded from: %s (scale=%.2f)", args.lora_path, args.lora_scale)
 
     # Initialize Omni model
     omni = Omni(
@@ -266,66 +341,79 @@ def main():
     if ignored_layers:
         print(f"  Ignored layers: {ignored_layers}")
     print(
-        f"  Parallel configuration: tensor_parallel_size={args.tensor_parallel_size}, "
-        f"ulysses_degree={args.ulysses_degree}, ring_degree={args.ring_degree}, cfg_parallel_size={args.cfg_parallel_size}, "
-        f"vae_patch_parallel_size={args.vae_patch_parallel_size}"
+        f"  Parallel: tp={args.tensor_parallel_size}, ulysses={args.ulysses_degree}, "
+        f"ring={args.ring_degree}, cfg={args.cfg_parallel_size}, "
+        f"vae_patch={args.vae_patch_parallel_size}, "
+        f"expert_parallel={args.enable_expert_parallel}"
     )
-    print(f"  CPU offload: {args.enable_cpu_offload}")
+    if args.use_hsdp:
+        print(f"  HSDP: shard_size={args.hsdp_shard_size}, replicate_size={args.hsdp_replicate_size}")
+    print(f"  CPU offload (module): {args.enable_cpu_offload}")
+    print(f"  CPU offload (layerwise): {args.enable_layerwise_offload}")
+    if lora_request is not None:
+        print(f"  LoRA adapter: {args.lora_path} (scale={args.lora_scale})")
     print(f"  Image size: {args.width}x{args.height}")
     print(f"{'=' * 60}\n")
 
     # Process each prompt sequentially
     generation_times = []
     image_counter = 0
-    
+
     for prompt_idx, prompt in enumerate(prompts, start=1):
         print(f"\n{'=' * 60}")
         print(f"Processing prompt {prompt_idx}/{len(prompts)}")
         print(f"Prompt: {prompt}")
         print(f"{'=' * 60}\n")
-        
+
+        sampling_params_kwargs: dict[str, Any] = dict(
+            height=args.height,
+            width=args.width,
+            generator=generator,
+            true_cfg_scale=args.cfg_scale,
+            guidance_scale=args.guidance_scale,
+            num_inference_steps=args.num_inference_steps,
+            num_outputs_per_prompt=args.num_images_per_prompt,
+        )
+        if lora_request is not None:
+            sampling_params_kwargs["lora_request"] = lora_request
+            sampling_params_kwargs["lora_scale"] = args.lora_scale
+
         generation_start = time.perf_counter()
         outputs = omni.generate(
             {
                 "prompt": prompt,
                 "negative_prompt": args.negative_prompt,
             },
-            OmniDiffusionSamplingParams(
-                height=args.height,
-                width=args.width,
-                generator=generator,
-                true_cfg_scale=args.cfg_scale,
-                guidance_scale=args.guidance_scale,
-                num_inference_steps=args.num_inference_steps,
-                num_outputs_per_prompt=args.num_images_per_prompt,
-            ),
+            OmniDiffusionSamplingParams(**sampling_params_kwargs),
         )
         generation_end = time.perf_counter()
         generation_time = generation_end - generation_start
         generation_times.append(generation_time)
-        
-        print(f"Generation time for prompt {prompt_idx}: {generation_time:.4f} seconds ({generation_time * 1000:.2f} ms)")
-        
+
+        print(
+            f"Generation time for prompt {prompt_idx}: {generation_time:.4f} seconds ({generation_time * 1000:.2f} ms)"
+        )
+
         # Extract and save images
         if not outputs or len(outputs) == 0:
             logger.warning(f"No output generated for prompt {prompt_idx}")
             continue
-        
+
         first_output = outputs[0]
         if not hasattr(first_output, "request_output") or not first_output.request_output:
             logger.warning(f"No request_output found for prompt {prompt_idx}")
             continue
-        
+
         req_out = first_output.request_output[0]
         if not isinstance(req_out, OmniRequestOutput) or not hasattr(req_out, "images"):
             logger.warning(f"Invalid request_output structure for prompt {prompt_idx}")
             continue
-        
+
         images = req_out.images
         if not images:
             logger.warning(f"No images found for prompt {prompt_idx}")
             continue
-        
+
         # Save images with sequential numbering
         for img in images:
             save_path = output_dir / f"image_{image_counter:04d}.png"
@@ -339,10 +427,10 @@ def main():
     print(f"{'=' * 60}")
     print(f"Total prompts processed: {len(prompts)}")
     print(f"Total images generated: {image_counter}")
-    print(f"\nGeneration times:")
+    print("\nGeneration times:")
     for idx, gen_time in enumerate(generation_times, start=1):
         print(f"  Prompt {idx}: {gen_time:.4f} seconds ({gen_time * 1000:.2f} ms)")
-    
+
     if generation_times:
         avg_time = sum(generation_times) / len(generation_times)
         total_time = sum(generation_times)
