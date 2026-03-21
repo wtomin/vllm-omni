@@ -39,7 +39,16 @@
         "server_params": {
             "model": "Qwen/Qwen-Image",
             "env": {
-                "SGLANG_CACHE_DIT_ENABLED": "true"
+                "SGLANG_CACHE_DIT_ENABLED": "true",
+                "SGLANG_CACHE_DIT_FN": "1",
+                "SGLANG_CACHE_DIT_BN": "0",
+                "SGLANG_CACHE_DIT_WARMUP": "4",
+                "SGLANG_CACHE_DIT_RDT": "0.24",
+                "SGLANG_CACHE_DIT_MC": "3",
+                "SGLANG_CACHE_DIT_TAYLORSEER": "false",
+                "SGLANG_CACHE_DIT_TS_ORDER": "1",
+                "SGLANG_CACHE_DIT_SCM_PRESET": "none",
+                "SGLANG_CACHE_DIT_SCM_POLICY": "dynamic"
             },
             "serve_args": {
                 "num-gpus": 4,
