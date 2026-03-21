@@ -9,7 +9,10 @@
                 "num-gpus": 4,
                 "sp-degree": 2,
                 "ulysses-degree": 2,
-                "enable-cfg-parallel": true
+                "enable-cfg-parallel": true,
+                "dit-cpu-offload": false,
+                "text-encoder-cpu-offload": false,
+                "vae-cpu-offload": false
             }
         },
         "benchmark_params": {"$ref": "benchmark_params.json"}
@@ -26,7 +29,10 @@
                 "sp-degree": 2,
                 "ulysses-degree": 2,
                 "enable-cfg-parallel": true,
-                "use-parallel-tiling": true
+                "use-parallel-tiling": true,
+                "dit-cpu-offload": false,
+                "text-encoder-cpu-offload": false,
+                "vae-cpu-offload": false
             }
         },
         "benchmark_params": {"$ref": "benchmark_params.json"}
@@ -54,7 +60,10 @@
                 "num-gpus": 4,
                 "sp-degree": 2,
                 "ulysses-degree": 2,
-                "enable-cfg-parallel": true
+                "enable-cfg-parallel": true,
+                "dit-cpu-offload": false,
+                "text-encoder-cpu-offload": false,
+                "vae-cpu-offload": false
             }
         },
         "benchmark_params": {"$ref": "benchmark_params.json"}
