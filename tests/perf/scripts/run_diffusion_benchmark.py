@@ -534,7 +534,7 @@ def run_benchmark(
         if isinstance(value, bool):
             if value:
                 cmd.append(flag)
-        elif isinstance(value, dict):
+        elif isinstance(value, (dict, list)):
             cmd.extend([flag, json.dumps(value, separators=(",", ":"))])
         else:
             cmd.extend([flag, str(value)])
