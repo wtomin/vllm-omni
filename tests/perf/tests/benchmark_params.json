@@ -22,7 +22,7 @@
         "task": "t2i",
         "width": 1536,
         "height": 1536,
-        "num-inference-steps": 20,
+        "num-inference-steps": 35,
         "num-prompts": 10,
         "max-concurrency": 1,
         "enable-negative-prompt": true,
