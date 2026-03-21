@@ -462,7 +462,7 @@ def diffusion_server(request):
     print(f"{server_type} server stopped")
 
 
-@pytest.fixture(params=benchmark_indices)
+@pytest.fixture
 def benchmark_params(request, diffusion_server):
     """Yield the benchmark params dict for the current (test_name, index) pair."""
     test_name, param_index = request.param
