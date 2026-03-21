@@ -552,9 +552,14 @@ def run_benchmark(
     the run completes the metrics are merged with full metadata (test_name,
     backend, benchmark_params, timestamp) and appended to the session-wide
     aggregated JSON file (AGGREGATED_RESULT_FILE).  The temporary file is
-    removed afterwards.
+    removed afterwards.  Subprocess stdout/stderr are tee'd to a .log file
+    under BENCHMARK_RESULT_DIR/logs/; its path is stored in the record.
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+    log_dir = BENCHMARK_RESULT_DIR / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / f"{test_name}_{backend}_{timestamp}.log"
 
     with tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="diffusion_bench_tmp_", delete=False) as tmp:
         tmp_result_file = Path(tmp.name)
@@ -593,6 +598,7 @@ def run_benchmark(
             cmd.extend([flag, str(value)])
 
     print(f"\nRunning benchmark (backend={backend}): {' '.join(cmd)}")
+    print(f"  Log file: {log_file}")
 
     process = subprocess.Popen(
         cmd,
@@ -604,17 +610,20 @@ def run_benchmark(
         cwd=str(Path(__file__).parent.parent.parent.parent),
     )
 
-    def _drain(stream) -> None:
+    def _drain(stream, log_fh) -> None:
         for line in iter(stream.readline, ""):
             print(line, end="")
+            log_fh.write(line)
 
-    stdout_thread = threading.Thread(target=_drain, args=(process.stdout,), daemon=True)
-    stderr_thread = threading.Thread(target=_drain, args=(process.stderr,), daemon=True)
-    stdout_thread.start()
-    stderr_thread.start()
-    stdout_thread.join()
-    stderr_thread.join()
-    process.wait()
+    with open(log_file, "w", encoding="utf-8") as log_fh:
+        log_fh.write(f"cmd: {' '.join(cmd)}\n\n")
+        stdout_thread = threading.Thread(target=_drain, args=(process.stdout, log_fh), daemon=True)
+        stderr_thread = threading.Thread(target=_drain, args=(process.stderr, log_fh), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        stdout_thread.join()
+        stderr_thread.join()
+        process.wait()
 
     if process.returncode != 0:
         tmp_result_file.unlink(missing_ok=True)
@@ -635,9 +644,11 @@ def run_benchmark(
         "timestamp": timestamp,
         "benchmark_params": params,
         "result": metrics,
+        "log_file": str(log_file),
     }
     _append_to_aggregated_file(record)
     print(f"\n  Result appended to: {AGGREGATED_RESULT_FILE}")
+    print(f"  Log saved to:       {log_file}")
 
     return metrics
 
