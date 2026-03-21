@@ -339,6 +339,7 @@ backends_function_mapping = {
     "2i": {
         "vllm-omni": (async_request_chat_completions, "/v1/chat/completions"),
         "openai": (async_request_openai_images, "/v1/images/generations"),
+        "sglang": (async_request_openai_images, "/v1/images/generations"),
     },
     "2v": {
         "v1/videos": (async_request_v1_videos, "/v1/videos"),
