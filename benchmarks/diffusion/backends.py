@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import json
 import mimetypes
 import os
 import time
