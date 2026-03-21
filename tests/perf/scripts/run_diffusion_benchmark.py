@@ -606,33 +606,27 @@ def run_benchmark(
     print(f"\nRunning benchmark (backend={backend}): {' '.join(cmd)}")
     print(f"  Log file: {log_file}")
 
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-        universal_newlines=True,
-        cwd=str(Path(__file__).parent.parent.parent.parent),
-    )
-
-    _log_lock = threading.Lock()
-
-    def _drain(stream, log_fh) -> None:
-        for line in iter(stream.readline, ""):
-            print(line, end="")
-            with _log_lock:
-                log_fh.write(line)
-                log_fh.flush()
-
+    # Merge stderr into stdout so both streams are read from a single pipe in
+    # the main thread.  This avoids the two-thread drain pattern which can miss
+    # output due to race conditions between the two readers.
     with open(log_file, "w", encoding="utf-8") as log_fh:
         log_fh.write(f"cmd: {' '.join(cmd)}\n\n")
-        stdout_thread = threading.Thread(target=_drain, args=(process.stdout, log_fh), daemon=True)
-        stderr_thread = threading.Thread(target=_drain, args=(process.stderr, log_fh), daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-        stdout_thread.join()
-        stderr_thread.join()
+        log_fh.flush()
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            cwd=str(Path(__file__).parent.parent.parent.parent),
+        )
+
+        for line in process.stdout:
+            print(line, end="")
+            log_fh.write(line)
+            log_fh.flush()
+
         process.wait()
 
     if process.returncode != 0:
