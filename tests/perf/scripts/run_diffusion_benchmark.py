@@ -317,22 +317,22 @@ class SglangServer:
 
     @staticmethod
     def _write_cache_dit_yaml(config: dict[str, Any]) -> str:
-        """Serialize config dict to a temp YAML file and return its path."""
+        """Serialize config dict to a temp YAML file and return its path.
+
+        Tries PyYAML first for clean block-style output; falls back to
+        json.dump since JSON is valid YAML and correctly handles arbitrary
+        nesting, lists, booleans, and null values.
+        """
         tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
         try:
             import yaml  # PyYAML
 
-            yaml.dump(config, tmp, default_flow_style=False)
+            yaml.dump(config, tmp, default_flow_style=False, allow_unicode=True)
         except ImportError:
-            # Fallback: write flat YAML manually (no nested structures expected)
-            for k, v in config.items():
-                if isinstance(v, bool):
-                    tmp.write(f"{k}: {'true' if v else 'false'}\n")
-                elif v is None:
-                    tmp.write(f"{k}: null\n")
-                else:
-                    tmp.write(f"{k}: {v}\n")
+            json.dump(config, tmp, indent=2, ensure_ascii=False)
+            tmp.write("\n")
         tmp.close()
+        print(f"  Cache-DiT config written to: {tmp.name}")
         return tmp.name
 
     def _start_server(self) -> None:
