@@ -15,12 +15,13 @@ JSON config entries are distinguished by a "server_type" field ("vllm-omni" or "
 sglang entries support two additional fields under server_params:
   - "env": dict of extra environment variables (e.g. SGLANG_CACHE_DIT_ENABLED)
   - "cache_dit_config": dict written to a temp YAML and passed as
-    --cache-dit-config to sglang serve (requires cache-dit >= 1.2.0)
+    --cache-dit-config to sglang serve (requires cache-dit == 1.3.0)
 
 Results for every run are saved as individual JSON files under BENCHMARK_RESULT_DIR
 (override via the DIFFUSION_BENCHMARK_DIR environment variable).
 """
 
+import importlib.metadata
 import json
 import os
 import socket
@@ -260,13 +261,35 @@ class DiffusionServer:
             _kill_process_tree(self.proc.pid)
 
 
+_CACHE_DIT_REQUIRED_VERSION = os.environ.get("CACHE_DIT_VERSION", "1.3.0")
+
+
+def _check_cache_dit_version(required: str = _CACHE_DIT_REQUIRED_VERSION) -> None:
+    """Verify that the installed cache-dit package matches *required* exactly.
+
+    Raises RuntimeError if the package is not installed or the version differs.
+    """
+    try:
+        installed = importlib.metadata.version("cache-dit")
+    except importlib.metadata.PackageNotFoundError:
+        raise RuntimeError(
+            f"cache-dit is not installed. Please install version {required}: pip install cache-dit=={required}"
+        )
+    if installed != required:
+        raise RuntimeError(
+            f"cache-dit version mismatch: required {required}, "
+            f"but found {installed}. "
+            f"Please install the correct version: pip install cache-dit=={required}"
+        )
+
+
 class SglangServer:
     """Start a sglang serve process for diffusion benchmarking.
 
     Supports two Cache-DiT activation modes:
       1. Environment variable:  pass env={"SGLANG_CACHE_DIT_ENABLED": "true"}
       2. YAML config file:      pass cache_dit_config={...} (written to a temp
-         file and forwarded as --cache-dit-config; requires cache-dit >= 1.2.0)
+         file and forwarded as --cache-dit-config; requires cache-dit >= 1.3.0)
     """
 
     server_type = "sglang"
@@ -289,6 +312,8 @@ class SglangServer:
         self.proc: subprocess.Popen | None = None
         self._tmp_yaml: str | None = None
         self.test_name: str = ""
+        if self.cache_dit_config is not None:
+            _check_cache_dit_version()
 
     @staticmethod
     def _write_cache_dit_yaml(config: dict[str, Any]) -> str:
