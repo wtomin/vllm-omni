@@ -69,9 +69,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -447,6 +450,34 @@ def write_config_meta(
     (cfg_dir / "config_info.json").write_text(json.dumps(meta, indent=2))
 
 
+# ── Process-group cleanup ─────────────────────────────────────────────────────
+
+
+def _kill_process_group(pgid: int) -> None:
+    """Send SIGKILL to the entire process group.
+
+    This is the only reliable way to reap GPU worker processes spawned by
+    ``torch.multiprocessing.spawn`` inside the batch script — they share the
+    same session/group but ``subprocess.communicate`` never waits for them.
+    """
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _stream_and_collect(stream, buf: list[bytes], prefix: str = "  │ ") -> None:
+    """Read *stream* line-by-line, print each line immediately, and append to *buf*.
+
+    Runs in a daemon thread so the main thread can call proc.wait() and react
+    the moment the process exits rather than waiting for all output to buffer.
+    """
+    for raw in stream:
+        buf.append(raw)
+        sys.stdout.write(prefix + raw.decode(errors="replace"))
+        sys.stdout.flush()
+
+
 # ── Per-prompt runner ─────────────────────────────────────────────────────────
 
 
@@ -491,25 +522,64 @@ def run_batch_prompts(
         print(f"    DRY-RUN: {' '.join(cmd)}")
         return num_prompts, 0
 
-    # Run batch generation
+    # Run batch generation.
+    # Use a new process session/group so that any worker processes spawned by
+    # torch.multiprocessing.spawn (e.g. for cfg_parallel / ulysses / tp) are
+    # guaranteed to be killed when the batch script exits.  Without this, a
+    # failed test leaves GPU-worker orphans that hold VRAM and cause every
+    # subsequent test to fail.
     t0 = time.monotonic()
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+
+    # Capture pgid immediately while the process is alive so we can still
+    # reference it after the process has exited.
+    pgid = os.getpgid(proc.pid)
+
+    # Stream output in real-time on a background thread so errors are visible
+    # the moment they occur instead of being buffered until the process ends.
+    output_buf: list[bytes] = []
+    reader = threading.Thread(
+        target=_stream_and_collect,
+        args=(proc.stdout, output_buf),
+        daemon=True,
+    )
+    reader.start()
+
+    try:
+        proc.wait()
+    except KeyboardInterrupt:
+        _kill_process_group(pgid)
+        proc.wait()
+        raise
+    finally:
+        # Kill any lingering GPU worker processes that outlived the main script.
+        # This runs immediately when proc.wait() returns (i.e. as soon as the
+        # batch script exits), so orphaned torch workers are reaped right away.
+        _kill_process_group(pgid)
+
+    # Wait for the reader thread to flush any remaining lines.
+    reader.join(timeout=5)
+
     elapsed_ms = (time.monotonic() - t0) * 1_000
-    rc = result.returncode
+    rc = proc.returncode
+    stdout_bytes = b"".join(output_buf)
+
+    if rc != 0:
+        # Give the OS a moment to reclaim GPU memory from killed workers before
+        # the next config starts.
+        time.sleep(3)
 
     # Save batch log
     batch_log_path = cfg_dir / "batch_generation.log"
-    batch_log_path.write_bytes(result.stdout)
+    batch_log_path.write_bytes(stdout_bytes)
 
     # Save batch exit code
     batch_rc_path = cfg_dir / "batch_generation.exitcode"
     batch_rc_path.write_text(str(rc))
 
     if rc != 0:
-        _log(f"BATCH FAIL (rc={rc})", "FAIL")
-        tail = result.stdout.decode(errors="replace").splitlines()[-10:]
-        for ln in tail:
-            print(f"      │ {ln}")
+        _log(f"BATCH FAIL (rc={rc}) — see log: {batch_log_path}", "FAIL")
         return 0, num_prompts
 
     # Rename generated images from image_NNNN.png to prompt_NN.png
