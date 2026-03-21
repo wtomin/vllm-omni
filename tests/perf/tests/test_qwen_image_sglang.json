@@ -40,21 +40,26 @@
 
     {
         "test_name": "test_sglang_qwen_image_ulysses2_cfg2_cache_dit",
-        "description": "sglang: USP=2 + CFG-parallel=2 + Cache-DiT via env var",
+        "description": "sglang: USP=2 + CFG-parallel=2 + Cache-DiT via YAML config (--cache-dit-config)",
         "server_type": "sglang",
         "server_params": {
             "model": "Qwen/Qwen-Image",
-            "env": {
-                "SGLANG_CACHE_DIT_ENABLED": "true",
-                "SGLANG_CACHE_DIT_FN": "1",
-                "SGLANG_CACHE_DIT_BN": "0",
-                "SGLANG_CACHE_DIT_WARMUP": "4",
-                "SGLANG_CACHE_DIT_RDT": "0.24",
-                "SGLANG_CACHE_DIT_MC": "3",
-                "SGLANG_CACHE_DIT_TAYLORSEER": "false",
-                "SGLANG_CACHE_DIT_TS_ORDER": "1",
-                "SGLANG_CACHE_DIT_SCM_PRESET": "none",
-                "SGLANG_CACHE_DIT_SCM_POLICY": "dynamic"
+            "cache_dit_config": {
+                "cache_config": {
+                    "Fn_compute_blocks": 1,
+                    "Bn_compute_blocks": 0,
+                    "max_warmup_steps": 4,
+                    "residual_diff_threshold": 0.24,
+                    "max_continuous_cached_steps": 3,
+                    "enable_taylorseer": false,
+                    "taylorseer_order": 1,
+                    "scm_steps_mask_policy": "none",
+                    "scm_steps_policy": "dynamic"
+                },
+                "parallelism_config": {
+                    "ulysses_size": 2,
+                    "attention_backend": "native"
+                }
             },
             "serve_args": {
                 "num-gpus": 4,
