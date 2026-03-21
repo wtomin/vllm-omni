@@ -429,15 +429,7 @@ def _make_server(server_cfg: dict[str, Any]) -> DiffusionServer | SglangServer:
 server_params = _unique_server_params(BENCHMARK_CONFIGS)
 test_param_map = _test_param_mapping(BENCHMARK_CONFIGS)
 
-_seen_indices: set[tuple[str, int]] = set()
-benchmark_indices: list[tuple[str, int]] = []
-for _cfg in BENCHMARK_CONFIGS:
-    _name = _cfg["test_name"]
-    for _idx in range(len(test_param_map[_name])):
-        _entry = (_name, _idx)
-        if _entry not in _seen_indices:
-            _seen_indices.add(_entry)
-            benchmark_indices.append(_entry)
+benchmark_indices: list[int] = list(range(max(len(v) for v in test_param_map.values())))
 
 # ---------------------------------------------------------------------------
 # Pytest fixtures
@@ -464,17 +456,15 @@ def diffusion_server(request):
 
 @pytest.fixture
 def benchmark_params(request, diffusion_server):
-    """Yield the benchmark params dict for the current (test_name, index) pair."""
-    test_name, param_index = request.param
-
-    if test_name != diffusion_server.test_name:
-        pytest.skip(f"Skipping {test_name} – server is configured for {diffusion_server.test_name}")
+    """Yield the benchmark params dict for the current (server, index) pair."""
+    param_index: int = request.param
+    test_name = diffusion_server.test_name
 
     params_list = test_param_map.get(test_name, [])
     if not params_list:
         raise ValueError(f"No benchmark params for test: {test_name}")
     if param_index >= len(params_list):
-        raise ValueError(f"Param index {param_index} out of range for test: {test_name}")
+        pytest.skip(f"Param index {param_index} out of range for {test_name} (has {len(params_list)} params)")
 
     current = param_index + 1
     total = len(params_list)
