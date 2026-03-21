@@ -17,8 +17,10 @@ sglang entries support two additional fields under server_params:
   - "cache_dit_config": dict written to a temp YAML and passed as
     --cache-dit-config to sglang serve (requires cache-dit == 1.3.0)
 
-Results for every run are saved as individual JSON files under BENCHMARK_RESULT_DIR
-(override via the DIFFUSION_BENCHMARK_DIR environment variable).
+All benchmark results for a session are consolidated into a single JSON file under
+BENCHMARK_RESULT_DIR (override via the DIFFUSION_BENCHMARK_DIR environment variable).
+Each entry in the file contains the test metadata (test_name, backend, benchmark_params,
+timestamp) together with the raw metrics returned by the benchmark script.
 """
 
 import importlib.metadata
@@ -50,6 +52,11 @@ BENCHMARK_RESULT_DIR = Path(os.environ.get("DIFFUSION_BENCHMARK_DIR", str(_DEFAU
 BENCHMARK_SCRIPT = str(
     Path(__file__).parent.parent.parent.parent / "benchmarks" / "diffusion" / "diffusion_benchmark_serving.py"
 )
+
+# Single aggregated result file for the entire benchmark session.
+# Populated lazily after CONFIG_FILE_PATH is resolved.
+_SESSION_TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
+_RESULT_LOCK = threading.Lock()
 
 
 def _get_config_file_from_argv() -> str | None:
@@ -111,6 +118,27 @@ def load_configs(config_path: str) -> list[dict[str, Any]]:
 
 
 BENCHMARK_CONFIGS = load_configs(CONFIG_FILE_PATH)
+
+_config_stem = Path(CONFIG_FILE_PATH).stem  # e.g. "test_qwen_image_vllm_omni"
+AGGREGATED_RESULT_FILE = BENCHMARK_RESULT_DIR / f"benchmark_results_{_config_stem}_{_SESSION_TIMESTAMP}.json"
+
+
+def _append_to_aggregated_file(record: dict[str, Any]) -> None:
+    """Thread-safe append of *record* to the session-level aggregated JSON file.
+
+    The file contains a JSON array; each call loads the existing array (or
+    starts a new one), appends the record, and writes the file back atomically.
+    """
+    with _RESULT_LOCK:
+        BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
+        if AGGREGATED_RESULT_FILE.exists():
+            with open(AGGREGATED_RESULT_FILE, encoding="utf-8") as f:
+                records: list[dict] = json.load(f)
+        else:
+            records = []
+        records.append(record)
+        with open(AGGREGATED_RESULT_FILE, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=2, ensure_ascii=False)
 
 
 # Register --config-file with pytest so it does not reject the argument.
@@ -520,14 +548,16 @@ def run_benchmark(
 ) -> dict[str, Any]:
     """Run diffusion_benchmark_serving.py as a subprocess and return parsed metrics.
 
-    The result JSON is saved under BENCHMARK_RESULT_DIR with the backend name
-    embedded in the filename so vllm-omni and sglang results stay distinct.
+    The raw metrics are written to a temporary file by the subprocess.  After
+    the run completes the metrics are merged with full metadata (test_name,
+    backend, benchmark_params, timestamp) and appended to the session-wide
+    aggregated JSON file (AGGREGATED_RESULT_FILE).  The temporary file is
+    removed afterwards.
     """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    BENCHMARK_RESULT_DIR.mkdir(parents=True, exist_ok=True)
-    param_name = params.get("name", "")
-    name_suffix = f"_{param_name}" if param_name else ""
-    result_file = BENCHMARK_RESULT_DIR / f"diffusion_perf_{backend}_{test_name}{name_suffix}_{timestamp}.json"
+
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", prefix="diffusion_bench_tmp_", delete=False) as tmp:
+        tmp_result_file = Path(tmp.name)
 
     exclude_keys = {"baseline", "dataset", "task", "name"}
 
@@ -547,7 +577,7 @@ def run_benchmark(
         "--task",
         params.get("task", "t2i"),
         "--output-file",
-        str(result_file),
+        str(tmp_result_file),
     ]
 
     for key, value in params.items():
@@ -587,13 +617,29 @@ def run_benchmark(
     process.wait()
 
     if process.returncode != 0:
+        tmp_result_file.unlink(missing_ok=True)
         raise RuntimeError(f"Benchmark script exited with code {process.returncode}")
 
-    if not result_file.exists():
-        raise FileNotFoundError(f"Benchmark result file not found: {result_file}")
+    if not tmp_result_file.exists():
+        raise FileNotFoundError(f"Benchmark result file not found: {tmp_result_file}")
 
-    with open(result_file, encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(tmp_result_file, encoding="utf-8") as f:
+            metrics: dict[str, Any] = json.load(f)
+    finally:
+        tmp_result_file.unlink(missing_ok=True)
+
+    record: dict[str, Any] = {
+        "test_name": test_name,
+        "backend": backend,
+        "timestamp": timestamp,
+        "benchmark_params": params,
+        "result": metrics,
+    }
+    _append_to_aggregated_file(record)
+    print(f"\n  Result appended to: {AGGREGATED_RESULT_FILE}")
+
+    return metrics
 
 
 # ---------------------------------------------------------------------------
@@ -667,11 +713,7 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
         if key in result:
             print(f"  {key}: {result[key]:.4f}")
 
-    saved = sorted(BENCHMARK_RESULT_DIR.glob(f"diffusion_perf_{backend}_{test_name}_*.json"))
-    if saved:
-        print(f"\n  Result files: {BENCHMARK_RESULT_DIR}")
-        for f in saved:
-            print(f"    {f.name}")
+    print(f"\n  Aggregated results: {AGGREGATED_RESULT_FILE}")
     print("=" * 60)
 
     assert_result(result, params)
