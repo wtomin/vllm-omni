@@ -597,6 +597,12 @@ def run_benchmark(
         else:
             cmd.extend([flag, str(value)])
 
+    # Insert -u so the subprocess runs with unbuffered stdout/stderr, ensuring
+    # all print() output is flushed to the pipe immediately instead of being
+    # held in Python's internal block-buffer until process exit (which can
+    # cause truncated or out-of-order log output when stdout is piped).
+    cmd = [cmd[0], "-u"] + cmd[1:]
+
     print(f"\nRunning benchmark (backend={backend}): {' '.join(cmd)}")
     print(f"  Log file: {log_file}")
 
@@ -610,10 +616,14 @@ def run_benchmark(
         cwd=str(Path(__file__).parent.parent.parent.parent),
     )
 
+    _log_lock = threading.Lock()
+
     def _drain(stream, log_fh) -> None:
         for line in iter(stream.readline, ""):
             print(line, end="")
-            log_fh.write(line)
+            with _log_lock:
+                log_fh.write(line)
+                log_fh.flush()
 
     with open(log_file, "w", encoding="utf-8") as log_fh:
         log_fh.write(f"cmd: {' '.join(cmd)}\n\n")
