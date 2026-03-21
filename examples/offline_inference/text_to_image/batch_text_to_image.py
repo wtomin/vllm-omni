@@ -12,7 +12,6 @@ import torch
 from vllm_omni.diffusion.data import DiffusionParallelConfig, logger
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.platforms import current_omni_platform
 
 
@@ -394,32 +393,38 @@ def main():
             f"Generation time for prompt {prompt_idx}: {generation_time:.4f} seconds ({generation_time * 1000:.2f} ms)"
         )
 
-        # Extract and save images
+        # Extract and save images.
+        # omni.generate() returns list[OmniRequestOutput]; each element maps to
+        # one request, and its .request_output carries the actual .images list.
         if not outputs or len(outputs) == 0:
             logger.warning(f"No output generated for prompt {prompt_idx}")
             continue
 
-        first_output = outputs[0]
-        if not hasattr(first_output, "request_output") or not first_output.request_output:
-            logger.warning(f"No request_output found for prompt {prompt_idx}")
-            continue
+        saved_this_prompt = 0
+        for out in outputs:
+            if not hasattr(out, "request_output") or not out.request_output:
+                logger.warning(f"No request_output found for prompt {prompt_idx}")
+                continue
 
-        req_out = first_output.request_output[0]
-        if not isinstance(req_out, OmniRequestOutput) or not hasattr(req_out, "images"):
-            logger.warning(f"Invalid request_output structure for prompt {prompt_idx}")
-            continue
+            req_out = out.request_output
+            if not hasattr(req_out, "images"):
+                logger.warning(f"Invalid request_output structure for prompt {prompt_idx}")
+                continue
 
-        images = req_out.images
-        if not images:
-            logger.warning(f"No images found for prompt {prompt_idx}")
-            continue
+            images = req_out.images
+            if not images:
+                logger.warning(f"No images found for prompt {prompt_idx}")
+                continue
 
-        # Save images with sequential numbering
-        for img in images:
-            save_path = output_dir / f"image_{image_counter:04d}.png"
-            img.save(save_path)
-            print(f"Saved image to {save_path}")
-            image_counter += 1
+            for img in images:
+                save_path = output_dir / f"image_{image_counter:04d}.png"
+                img.save(save_path)
+                print(f"Saved image to {save_path}")
+                image_counter += 1
+                saved_this_prompt += 1
+
+        if saved_this_prompt == 0:
+            logger.warning(f"No images saved for prompt {prompt_idx}")
 
     # Print summary statistics
     print(f"\n{'=' * 60}")
