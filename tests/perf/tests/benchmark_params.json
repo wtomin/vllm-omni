@@ -8,8 +8,7 @@
         "num-inference-steps": 20,
         "num-prompts": 10,
         "max-concurrency": 1,
-        "negative-prompt": "blurry, low quality, distorted",
-        "cfg-scale": 4.0,
+        "enable-negative-prompt": true,
         "baseline": {
             "throughput_qps": 0.001,
             "latency_p99": 1000.0,
@@ -26,8 +25,7 @@
         "num-inference-steps": 35,
         "num-prompts": 10,
         "max-concurrency": 1,
-        "negative-prompt": "blurry, low quality, distorted",
-        "cfg-scale": 4.0,
+        "enable-negative-prompt": true,
         "baseline": {
             "throughput_qps": 0.001,
             "latency_p99": 1000.0,
