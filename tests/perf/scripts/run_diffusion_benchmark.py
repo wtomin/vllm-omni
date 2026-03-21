@@ -385,13 +385,21 @@ class SglangServer:
 # ---------------------------------------------------------------------------
 
 
-def _build_serve_args(serve_args_dict: dict[str, Any]) -> list[str]:
-    """Convert a serve_args dict from test.json into a flat CLI argument list."""
+def _build_serve_args(serve_args_dict: dict[str, Any], server_type: str = "vllm-omni") -> list[str]:
+    """Convert a serve_args dict from test.json into a flat CLI argument list.
+
+    Boolean handling differs by server type:
+    - vllm-omni uses store_true/store_false style: True → add flag only,
+      False → omit flag entirely.
+    - sglang accepts explicit boolean values: always emit ``--flag true/false``.
+    """
     args: list[str] = []
     for key, value in serve_args_dict.items():
         flag = f"--{key}"
         if isinstance(value, bool):
-            if value:
+            if server_type == "sglang":
+                args.extend([flag, str(value).lower()])
+            elif value:
                 args.append(flag)
         elif isinstance(value, dict):
             args.extend([flag, json.dumps(value, separators=(",", ":"))])
@@ -415,7 +423,7 @@ def _unique_server_params(configs: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "test_name": test_name,
                 "server_type": server_type,
                 "model": cfg["server_params"]["model"],
-                "serve_args": _build_serve_args(cfg["server_params"].get("serve_args", {})),
+                "serve_args": _build_serve_args(cfg["server_params"].get("serve_args", {}), server_type),
                 "env_overrides": cfg["server_params"].get("env", {}),
                 "cache_dit_config": cfg["server_params"].get("cache_dit_config"),
                 "benchmark_backend": server_type,  # "vllm-omni" or "sglang"
