@@ -606,28 +606,23 @@ def run_benchmark(
     print(f"\nRunning benchmark (backend={backend}): {' '.join(cmd)}")
     print(f"  Log file: {log_file}")
 
-    # Merge stderr into stdout so both streams are read from a single pipe in
-    # the main thread.  This avoids the two-thread drain pattern which can miss
-    # output due to race conditions between the two readers.
+    # Redirect stdout + stderr directly to the log file at the OS level
+    # (equivalent to `cmd > log 2>&1`), so no output is ever lost regardless
+    # of how the subprocess exits.  The log is echoed to the terminal afterwards.
     with open(log_file, "w", encoding="utf-8") as log_fh:
         log_fh.write(f"cmd: {' '.join(cmd)}\n\n")
         log_fh.flush()
 
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
+            stdout=log_fh,
+            stderr=log_fh,
             cwd=str(Path(__file__).parent.parent.parent.parent),
         )
-
-        for line in process.stdout:
-            print(line, end="")
-            log_fh.write(line)
-            log_fh.flush()
-
         process.wait()
+
+    with open(log_file, encoding="utf-8") as log_fh:
+        print(log_fh.read(), end="")
 
     if process.returncode != 0:
         tmp_result_file.unlink(missing_ok=True)
