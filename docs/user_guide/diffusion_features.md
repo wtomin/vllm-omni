@@ -129,18 +129,18 @@ The following tables show which models support each acceleration method:
 
 **Legend:**
 
-- ✅: Fully supported and tested
+- ✅: Functionality is supported
 - ❌: No support plan
-- 🙋: Not verified yet, help wanted!
+- ❓: Not verified yet and Not Recommended
 
 |  | ⚡TeaCache | ⚡Cache-DiT | 🔀Ulysses-SP | 🔀Ring-Attn | 🔀CFG-Parallel | 🔀Tensor Parallel | 🔀HSDP | 🔀Expert Parallel | 💾CPU Offloading (Layerwise) | 💾VAE Patch Parallel | 💾FP8 Quant | 💾GGUF Quant | 🔧LoRA Inference |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | **⚡TeaCache** | | | | | | | | | | | | | |
 | **⚡Cache-DiT** | ❌ | | | | | | | | | | | | |
-| **🔀Ulysses-SP** | 🙋 | 🙋 | | | | | | | | | | | |
-| **🔀Ring-Attn** | 🙋 | 🙋 | ✅ | | | | | | | | | | |
-| **🔀CFG-Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | | | | | | | | | |
-| **🔀Tensor Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | | | | | | | | |
+| **🔀Ulysses-SP** | ❓ | ✅ | | | | | | | | | | | |
+| **🔀Ring-Attn** | ❓ | ✅ | ✅ | | | | | | | | | | |
+| **🔀CFG-Parallel** | ✅ | ✅ | ✅ | ✅ | | | | | | | | | |
+| **🔀Tensor Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | | |
 | **🔀HSDP** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | | | | | | |
 | **🔀Expert Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | | | | | | |
 | **💾CPU Offloading (Layerwise)** | 🙋 | 🙋 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | | |
