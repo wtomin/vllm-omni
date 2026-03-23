@@ -688,10 +688,9 @@ def main() -> int:
             file=sys.stderr,
         )
 
-    # Locate batch_text_to_image.py relative to this script's repo root
+    # Locate batch_text_to_image.py in the same directory as this script
     script_dir = Path(__file__).resolve().parent
-    repo_root = script_dir.parents[2]  # tests/e2e/offline_inference → repo root
-    batch_script = repo_root / "examples" / "offline_inference" / "text_to_image" / "batch_text_to_image.py"
+    batch_script = script_dir / "batch_text_to_image.py"
     if not batch_script.exists():
         print(f"[ERROR] batch_text_to_image.py not found at: {batch_script}", file=sys.stderr)
         return 1

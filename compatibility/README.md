@@ -15,7 +15,7 @@
 ### 1. 最简单的测试（3 个提示词）
 
 ```bash
-cd tests/e2e/offline_inference
+cd compatibility
 
 python run_compat_test.py \
     --baseline-feature cfg_parallel \
@@ -418,7 +418,7 @@ python run_compat_test.py \
 **开始你的第一个测试吧！** 🚀
 
 ```bash
-cd tests/e2e/offline_inference
+cd compatibility
 
 python run_compat_test.py \
     --baseline-feature cfg_parallel \

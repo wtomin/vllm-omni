@@ -12,7 +12,6 @@ import torch
 from vllm_omni.diffusion.data import DiffusionParallelConfig, logger
 from vllm_omni.entrypoints.omni import Omni
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
-from vllm_omni.outputs import OmniRequestOutput
 from vllm_omni.platforms import current_omni_platform
 
 
@@ -404,8 +403,8 @@ def main():
             logger.warning(f"No request_output found for prompt {prompt_idx}")
             continue
 
-        req_out = first_output.request_output[0]
-        if not isinstance(req_out, OmniRequestOutput) or not hasattr(req_out, "images"):
+        req_out = first_output.request_output
+        if not hasattr(req_out, "images"):
             logger.warning(f"Invalid request_output structure for prompt {prompt_idx}")
             continue
 
