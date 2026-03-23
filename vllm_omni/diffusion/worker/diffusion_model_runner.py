@@ -201,8 +201,8 @@ class DiffusionModelRunner:
         max_memory_allocated so that allocator fragmentation is also visible.
         See: https://docs.pytorch.org/docs/stable/generated/torch.cuda.memory.max_memory_reserved.html
         """
-        peak_reserved_bytes = torch.get_device_module().max_memory_reserved()
-        peak_allocated_bytes = torch.get_device_module().max_memory_allocated()
+        peak_reserved_bytes = current_omni_platform.max_memory_reserved()
+        peak_allocated_bytes = current_omni_platform.max_memory_allocated()
 
         output.peak_memory_mb = peak_reserved_bytes / (1024**2)
         peak_reserved_gb = peak_reserved_bytes / (1024**3)
@@ -268,7 +268,7 @@ class DiffusionModelRunner:
 
             is_primary = not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0
             if is_primary:
-                torch.get_device_module().reset_peak_memory_stats()
+                current_omni_platform.reset_peak_memory_stats()
 
             with set_forward_context(vllm_config=self.vllm_config, omni_diffusion_config=self.od_config):
                 with record_function("pipeline_forward"):
