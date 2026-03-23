@@ -69,9 +69,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -491,17 +494,47 @@ def run_batch_prompts(
         print(f"    DRY-RUN: {' '.join(cmd)}")
         return num_prompts, 0
 
-    # Run batch generation, streaming output to screen and log file simultaneously
+    # Run batch generation, streaming output to screen and log file simultaneously.
+    # start_new_session=True puts the subprocess in its own process group so that
+    # when the main batch script exits (e.g. due to a worker crash), we can send
+    # SIGTERM to the entire group and unblock the stdout pipe read loop.
     t0 = time.monotonic()
     output_chunks: list[bytes] = []
-    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
+    with subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    ) as proc:
+        pgid = os.getpgid(proc.pid)
         assert proc.stdout is not None
-        for line in proc.stdout:
-            sys.stdout.buffer.write(line)
-            sys.stdout.buffer.flush()
-            output_chunks.append(line)
-        proc.wait()
-        rc = proc.returncode
+
+        def _reap_group() -> None:
+            """Kill the process group once the main process exits."""
+            proc.wait()
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
+
+        reaper = threading.Thread(target=_reap_group, daemon=True)
+        reaper.start()
+
+        try:
+            for line in proc.stdout:
+                sys.stdout.buffer.write(line)
+                sys.stdout.buffer.flush()
+                output_chunks.append(line)
+        finally:
+            # Ensure the whole process group is cleaned up (covers KeyboardInterrupt
+            # and the normal case where main proc exited but workers linger).
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except (OSError, ProcessLookupError):
+                pass
+
+        reaper.join(timeout=10)
+        rc = proc.returncode if proc.returncode is not None else proc.wait()
     elapsed_ms = (time.monotonic() - t0) * 1_000
 
     # Save batch log
