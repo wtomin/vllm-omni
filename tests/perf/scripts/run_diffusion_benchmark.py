@@ -9,7 +9,7 @@ Supports two server backends:
 
 A config JSON file is REQUIRED via --config-file:
   pytest run_diffusion_benchmark.py --config-file tests/perf/tests/test_qwen_image_vllm_omni.json
-  pytest run_diffusion_benchmark.py --config-file tests/perf/tests/test_qwen_image_sglang.json
+  pytest run_diffusion_benchmark.py --config-file tests/perf/tests/test_qwen_image_sglang_diffusion.json
 
 JSON config entries are distinguished by a "server_type" field ("vllm-omni" or "sglang").
 sglang entries support two additional fields under server_params:
