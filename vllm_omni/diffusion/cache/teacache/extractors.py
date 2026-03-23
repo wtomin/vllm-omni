@@ -219,10 +219,7 @@ def extract_qwen_context(
     # EXTRACT MODULATED INPUT (for cache decision)
     # ============================================================================
     block = module.transformer_blocks[0]
-    # For zero_cond_t=True, temb has 2x batch size (doubled timestep).
-    # Use only the first half for the modulated input extraction.
-    temb_for_mod = temb[: temb.shape[0] // 2] if module.zero_cond_t else temb
-    img_mod_params = block.img_mod(temb_for_mod)
+    img_mod_params = block.img_mod(temb)
     img_mod1, _ = img_mod_params.chunk(2, dim=-1)
     img_modulated, _ = block.img_norm1(hidden_states, img_mod1)
 
@@ -275,9 +272,7 @@ def extract_qwen_context(
 
     def postprocess(h):
         """Apply Qwen-specific output postprocessing."""
-        # For zero_cond_t=True, temb has 2x batch size; use only the first half.
-        pp_temb = temb.chunk(2, dim=0)[0] if module.zero_cond_t else temb
-        h = module.norm_out(h, pp_temb)
+        h = module.norm_out(h, temb)
         output = module.proj_out(h)
         if not return_dict:
             return (output,)
