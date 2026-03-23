@@ -989,7 +989,6 @@ class QwenImagePipeline(nn.Module, QwenImageCFGParallelMixin, DiffusionPipelineP
             true_cfg_scale,
             image_latents=None,
             cfg_normalize=True,
-            generator=generator,
             additional_transformer_kwargs={
                 "return_dict": False,
                 "attention_kwargs": self.attention_kwargs,

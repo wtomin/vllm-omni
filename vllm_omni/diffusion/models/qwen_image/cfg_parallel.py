@@ -42,7 +42,6 @@ class QwenImageCFGParallelMixin(CFGParallelMixin, ProgressBarMixin):
         image_latents: torch.Tensor | None = None,
         cfg_normalize: bool = True,
         additional_transformer_kwargs: dict[str, Any] | None = None,
-        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """
         Diffusion loop with optional classifier-free guidance.
