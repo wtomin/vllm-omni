@@ -141,13 +141,13 @@ The following tables show which models support each acceleration method:
 | **🔀Ring-Attn** | ❓ | ✅ | ✅ | | | | | | | | | | |
 | **🔀CFG-Parallel** | ✅ | ✅ | ✅ | ✅ | | | | | | | | | |
 | **🔀Tensor Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | | |
-| **🔀HSDP** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | | | | | | |
-| **🔀Expert Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | | | | | | |
-| **💾CPU Offloading (Layerwise)** | 🙋 | 🙋 | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | | |
-| **💾VAE Patch Parallel** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | | | |
-| **💾FP8 Quant** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | | | |
-| **💾GGUF Quant** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | ❌ | | |
-| **🔧LoRA Inference** | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | 🙋 | |
+| **🔀HSDP** | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | | | | | | |
+| **🔀Expert Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | | | |
+| **💾CPU Offloading (Layerwise)** | ❓ | ❓ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | | |
+| **💾VAE Patch Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | | | |
+| **💾FP8 Quant** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | |
+| **💾GGUF Quant** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | |
+| **🔧LoRA Inference** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | |
 
 !!! info
 
