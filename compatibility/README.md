@@ -2,13 +2,6 @@
 
 基于批量处理的特性兼容性测试和性能评估框架，覆盖全部 13 种 diffusion 加速/优化特性。
 
-## 📚 文档导航
-
-| 文档 | 用途 | 适合人群 |
-|------|------|----------|
-| **[QUICK_REFERENCE.md](QUICK_REFERENCE.md)** | 快速参考卡片 | ⭐ 所有用户 |
-| **[EVALUATION_GUIDE.md](EVALUATION_GUIDE.md)** | 完整评估指南 | 深度使用者 |
-| **[BATCH_INTEGRATION_SUMMARY.md](BATCH_INTEGRATION_SUMMARY.md)** | 技术实现细节 | 开发者 |
 
 ## 🚀 快速开始
 
@@ -40,10 +33,10 @@ python diagnose_diff.py \
     --results-dir ./compat_results/cfg_parallel \
     --config cfg_parallel+teacache
 
-# 一次诊断所有配置，并生成 HTML 报告
+# 一次诊断所有配置并保存 JSON 报告
 python diagnose_diff.py \
     --results-dir ./compat_results/cfg_parallel \
-    --all --html --save-json
+    --all --save-json
 ```
 
 就这么简单！🎉
@@ -258,7 +251,7 @@ python analyze_compat_results.py --results-dir ./ci_test/cfg_parallel
 | `batch_text_to_image.py` | 批量图像生成 | 提示词文件 | 图片 + 时间统计 |
 | `run_compat_test.py` | 兼容性测试执行 | 特性配置 | 测试结果目录 |
 | `analyze_compat_results.py` | 结果分析 | 测试结果目录 | JSON 报告 + 图表 |
-| `diagnose_diff.py` | 图像差异诊断 | 测试结果目录 | 差异报告 + HTML |
+| `diagnose_diff.py` | 图像差异诊断 | 测试结果目录 | 差异报告（终端 + JSON） |
 | `compare_results.py` | 多结果对比 | 多个 JSON 报告 | 对比分析 |
 
 ### diagnose_diff.py 参数
@@ -270,7 +263,6 @@ python analyze_compat_results.py --results-dir ./ci_test/cfg_parallel
 | `--all` | 自动发现并诊断目录下所有非参考配置 |
 | `--reference NAME` | 参考配置名称（默认 `baseline`） |
 | `--top N` | 每个配置最多展示 N 张最差图片（默认 10） |
-| `--html` | 生成内联图片的 HTML 对比报告 |
 | `--save-json` | 每个配置保存一份 JSON 报告 |
 
 > SSIM 指标需要 `pip install scikit-image`，未安装时自动降级为 MeanDiff/MaxDiff。
@@ -284,7 +276,6 @@ compat_results/
 └── cfg_parallel/                    # 基线特性目录
     ├── manifest.json                # 测试元数据
     ├── report.json                  # 分析报告（运行 analyze 后生成）
-    ├── diff_report.html             # HTML 图像对比报告（--html）
     ├── chart_quality.png            # 质量对比图表
     ├── chart_speedgain.png          # 性能对比图表
     ├── baseline/                    # 纯基线配置
@@ -390,39 +381,3 @@ python run_compat_test.py \
 1. 更新本 README 和相关 Markdown 文件
 2. 确保示例代码可运行
 3. 提交 PR
-
-## 📝 更新日志
-
-### v3.0 (2026-03) — 全特性覆盖版本
-
-- ✅ 新增 7 种缺失特性：`hsdp`, `cpu_offload`, `layerwise_offload`, `vae_patch_parallel`, `fp8`, `gguf`, `lora`
-- ✅ `run_compat_test.py` 现覆盖全部 13 种 diffusion 特性
-- ✅ `vae_patch_parallel` 正确标记为 addon-only，并在 `build_configs()` 中强制校验
-- ✅ 新增 `CONFLICT_RULES` + `SINGLE_CARD_ONLY` 冲突检测：5 类不兼容组合自动跳过，汇总区分 `SKIP (conflict)` 与 `SKIP (GPU)`
-- ✅ `batch_text_to_image.py` 新增 `--use-hsdp`, `--hsdp-shard-size`, `--hsdp-replicate-size`, `--enable-expert-parallel`, `--lora-path`, `--lora-scale`, gguf 量化支持
-- ✅ `diagnose_diff.py` 全面重写：`--all` 批量模式、SSIM 指标、HTML 报告、彩色终端输出、多配置汇总表
-
-### v2.0 (2024-02) — 批量处理版本
-
-- ✅ 集成 `batch_text_to_image.py` 实现批量处理
-- ✅ 单次模型加载处理多个提示词
-- ✅ 自动计算平均生成时间
-
-### v1.0 (2024-01) — 初始版本
-
-- ✅ 基本兼容性测试框架
-- ✅ 结果分析和可视化
-
----
-
-**开始你的第一个测试吧！** 🚀
-
-```bash
-cd compatibility
-
-python run_compat_test.py \
-    --baseline-feature cfg_parallel \
-    --addons teacache fp8 \
-    --model Qwen/Qwen-Image-2512 \
-    --num-prompts 5 --steps 10
-```

@@ -25,19 +25,13 @@ Usage:
   # Use a custom reference directory instead of baseline/
   python diagnose_diff.py --results-dir ./compat_results/cfg_parallel \\
       --config cfg_parallel+teacache --reference cfg_parallel
-
-  # Generate an HTML side-by-side report
-  python diagnose_diff.py --results-dir ./compat_results/cfg_parallel \\
-      --all --html
 """
 
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import sys
-from io import BytesIO
 from pathlib import Path
 
 import numpy as np
@@ -276,84 +270,6 @@ def print_summary(results: list[dict]) -> None:
         )
 
 
-# ── HTML side-by-side report ──────────────────────────────────────────────────
-
-
-def _img_to_b64(path: Path) -> str:
-    try:
-        buf = BytesIO()
-        Image.open(path).convert("RGB").save(buf, format="PNG")
-        return base64.b64encode(buf.getvalue()).decode()
-    except Exception:
-        return ""
-
-
-def write_html_report(results: list[dict], out_path: Path) -> None:
-    """Write an HTML report with inline base-64 images."""
-    rows_html = []
-    for r in results:
-        config_name = r["config_name"]
-        valid = [d for d in r["diffs"] if "error" not in d]
-        if not valid:
-            continue
-
-        sorted_diffs = sorted(valid, key=lambda x: x["max_diff"], reverse=True)
-
-        for d in sorted_diffs:
-            ref_b64 = _img_to_b64(Path(d["ref_path"]))
-            tst_b64 = _img_to_b64(Path(d["tst_path"]))
-            label, _ = _status(d["mean_diff"], d["max_diff"])
-            colour_map = {"LARGE": "#f44336", "WARN ": "#ff9800", "OK   ": "#4caf50"}
-            bg = colour_map.get(label, "#ffffff")
-            ssim_str = f"{d['ssim']:.4f}" if not np.isnan(d["ssim"]) else "n/a"
-            rows_html.append(f"""
-            <tr>
-              <td>{config_name}</td>
-              <td>prompt_{d["idx"]:02d}</td>
-              <td style="background:{bg};color:#fff;font-weight:bold">{label.strip()}</td>
-              <td>{d["mean_diff"]:.6f}</td>
-              <td>{d["max_diff"]:.6f}</td>
-              <td>{ssim_str}</td>
-              <td>{'<img src="data:image/png;base64,' + ref_b64 + '" width="200">' if ref_b64 else "(missing)"}</td>
-              <td>{'<img src="data:image/png;base64,' + tst_b64 + '" width="200">' if tst_b64 else "(missing)"}</td>
-            </tr>""")
-
-    html = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <title>Diff Diagnosis Report</title>
-  <style>
-    body {{ font-family: monospace; padding: 1em; }}
-    table {{ border-collapse: collapse; width: 100%; }}
-    th, td {{ border: 1px solid #ccc; padding: 6px 10px; vertical-align: top; }}
-    th {{ background: #333; color: #fff; }}
-    tr:nth-child(even) {{ background: #f9f9f9; }}
-    img {{ display: block; max-width: 200px; }}
-  </style>
-</head>
-<body>
-  <h1>Diff Diagnosis Report</h1>
-  <p>SSIM available: {"yes (skimage)" if _HAS_SKIMAGE else "no (pip install scikit-image)"}</p>
-  <table>
-    <thead>
-      <tr>
-        <th>Config</th><th>Prompt</th><th>Status</th>
-        <th>MeanDiff</th><th>MaxDiff</th><th>SSIM</th>
-        <th>Reference</th><th>Test</th>
-      </tr>
-    </thead>
-    <tbody>
-      {"".join(rows_html)}
-    </tbody>
-  </table>
-</body>
-</html>"""
-
-    out_path.write_text(html, encoding="utf-8")
-    print(f"\n  HTML report → {out_path}")
-
-
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
@@ -390,11 +306,6 @@ def _parse_args() -> argparse.Namespace:
         type=int,
         default=10,
         help="Number of worst-diff images to show per config (default: 10).",
-    )
-    p.add_argument(
-        "--html",
-        action="store_true",
-        help="Write an HTML side-by-side report to <results-dir>/diff_report.html.",
     )
     p.add_argument(
         "--save-json",
@@ -449,10 +360,6 @@ def main() -> int:
 
     if len(all_results) > 1:
         print_summary(all_results)
-
-    if args.html and all_results:
-        html_path = results_dir / "diff_report.html"
-        write_html_report(all_results, html_path)
 
     return 0
 
