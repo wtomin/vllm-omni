@@ -200,7 +200,7 @@ steps:
       - kubernetes:
           podSpec:
             containers:
-              - image: 936637512419.dkr.ecr.us-west-2.amazonaws.com/vllm-ci-pull-through-cache/q9t5s3a7/vllm-ci-test-repo:$BUILDKITE_COMMITExpand commentComment on line R203Resolved
+              - image: 936637512419.dkr.ecr.us-west-2.amazonaws.com/vllm-ci-pull-through-cache/q9t5s3a7/vllm-ci-test-repo:$BUILDKITE_COMMIT
                 resources:
                   limits:
                     nvidia.com/gpu: 4
@@ -211,7 +211,12 @@ steps:
                     mountPath: /root/.cache/huggingface
                 env:
                   - name: HF_HOME
-                    value: /root/.cache/huggingfaceCollapse commentComment on line R214david6666666 commented on Mar 23, 2026 david6666666on Mar 23, 2026CollaboratorMore actionsdo you need to add HF_TOKEN following #2008React👍Unreact with 👍1wtominWrite a replyResolve comment
+                    value: /root/.cache/huggingface
+                  - name: HF_TOKEN
+                    valueFrom:
+                      secretKeyRef:
+                        name: hf-token-secret
+                        key: token
             nodeSelector:
               node.kubernetes.io/instance-type: gpu-h100-sxm
             volumes:
