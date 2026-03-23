@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # ── Row 5: CFG-Parallel ──────────────────────────────────────────────────────
-# 兼容性矩阵第 5 行：以 cfg_parallel 为基线，测试与缓存加速和序列并行特性的组合。
-# 需要 ≥2 GPU（cfg_parallel gpu_multiplier=2）。
+# Compatibility matrix row 5: cfg_parallel as baseline, test combinations with cache and sequence parallel features.
+# Requires ≥2 GPUs (cfg_parallel gpu_multiplier=2).
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache   — CFG-Parallel + TeaCache
 #   cache_dit  — CFG-Parallel + Cache-DiT
-#   ulysses    — CFG-Parallel + Ulysses-SP      (需 4 GPU)
-#   ring       — CFG-Parallel + Ring-Attn       (需 4 GPU)
+#   ulysses    — CFG-Parallel + Ulysses-SP      (requires 4 GPUs)
+#   ring       — CFG-Parallel + Ring-Attn       (requires 4 GPUs)
 #
-# 注：ulysses / ring 组合需要 4 GPU；GPU 不足时框架会自动标记 SKIP (GPU)。
+# Note: ulysses / ring combinations require 4 GPUs; the framework auto-marks SKIP (GPU) if insufficient.
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/05_cfg_parallel.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail

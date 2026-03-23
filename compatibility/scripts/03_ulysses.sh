@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ── Row 3: Ulysses-SP ────────────────────────────────────────────────────────
-# 兼容性矩阵第 3 行：以 ulysses 为基线，测试与缓存加速特性的组合。
-# 需要 ≥2 GPU（ulysses gpu_multiplier=2）。
+# Compatibility matrix row 3: ulysses as baseline, test combinations with cache acceleration features.
+# Requires ≥2 GPUs (ulysses gpu_multiplier=2).
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache   — Ulysses + TeaCache
 #   cache_dit  — Ulysses + Cache-DiT
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/03_ulysses.sh
 #   MODEL=Tongyi-MAI/Z-Image-Turbo NUM_PROMPTS=10 bash compatibility/scripts/03_ulysses.sh
 # ─────────────────────────────────────────────────────────────────────────────

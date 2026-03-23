@@ -1,11 +1,11 @@
-# vLLM-Omni 兼容性测试框架
+# vLLM-Omni Compatibility Test Framework
 
-基于批量处理的特性兼容性测试和性能评估框架，覆盖全部 13 种 diffusion 加速/优化特性。
+A batch-processing-based feature compatibility testing and performance evaluation framework covering all 13 diffusion acceleration/optimization features.
 
 
-## 🚀 快速开始
+## 🚀 Quick Start
 
-### 1. 最简单的测试（3 个提示词）
+### 1. Minimal test (3 prompts)
 
 ```bash
 cd compatibility
@@ -17,7 +17,7 @@ python run_compat_test.py \
     --steps 10
 ```
 
-### 2. 分析结果
+### 2. Analyze results
 
 ```bash
 python analyze_compat_results.py \
@@ -25,119 +25,119 @@ python analyze_compat_results.py \
     --charts
 ```
 
-### 3. 诊断图像差异
+### 3. Diagnose image differences
 
 ```bash
-# 诊断单个配置
+# Diagnose a single configuration
 python diagnose_diff.py \
     --results-dir ./compat_results/cfg_parallel \
     --config cfg_parallel+teacache
 
-# 一次诊断所有配置并保存 JSON 报告
+# Diagnose all configurations at once and save a JSON report
 python diagnose_diff.py \
     --results-dir ./compat_results/cfg_parallel \
     --all --save-json
 ```
 
-就这么简单！🎉
+That's it! 🎉
 
-## 🎯 支持的特性（13 种）
+## 🎯 Supported Features (13 total)
 
-### 加速：缓存方法（有损）
+### Acceleration: Cache Methods (Lossy)
 
-| 特性 ID | 说明 | GPU 需求 | 有损? | 典型加速比 |
-|---------|------|----------|-------|------------|
-| `teacache` | TeaCache 自适应缓存 | ×1 | ✅ | ~1.5× |
-| `cache_dit` | Cache-DiT（DBCache + TaylorSeer + SCM） | ×1 | ✅ | ~1.7× |
+| Feature ID | Description | GPU Requirement | Lossy? | Typical Speedup |
+|------------|-------------|-----------------|--------|-----------------|
+| `teacache` | TeaCache adaptive caching | ×1 | ✅ | ~1.5× |
+| `cache_dit` | Cache-DiT (DBCache + TaylorSeer + SCM) | ×1 | ✅ | ~1.7× |
 
-> `teacache` 和 `cache_dit` **不兼容**，不可同时使用。
+> `teacache` and `cache_dit` are **incompatible** and cannot be used together.
 
-### 加速：并行方法（无损）
+### Acceleration: Parallelism Methods (Lossless)
 
-| 特性 ID | 说明 | GPU 需求 | 有损? | 典型加速比 |
-|---------|------|----------|-------|------------|
-| `cfg_parallel` | CFG 正/负分支分发到 2 个 GPU | ×2 | ❌ | ~1.8× |
-| `ulysses` | Ulysses 序列并行（all-to-all） | ×2 | ❌ | ~1.6× |
-| `ring` | Ring 序列并行（ring 通信） | ×2 | ❌ | ~1.5× |
-| `tp` | 张量并行（权重分片） | ×2 | ❌ | ~1.4× |
-| `hsdp` | HSDP（FSDP2 权重分片，运行时重组） | ×2 | ❌ | ~1.3× |
+| Feature ID | Description | GPU Requirement | Lossy? | Typical Speedup |
+|------------|-------------|-----------------|--------|-----------------|
+| `cfg_parallel` | CFG positive/negative branches dispatched to 2 GPUs | ×2 | ❌ | ~1.8× |
+| `ulysses` | Ulysses sequence parallelism (all-to-all) | ×2 | ❌ | ~1.6× |
+| `ring` | Ring sequence parallelism (ring communication) | ×2 | ❌ | ~1.5× |
+| `tp` | Tensor parallelism (weight sharding) | ×2 | ❌ | ~1.4× |
+| `hsdp` | HSDP (FSDP2 weight sharding with runtime reassembly) | ×2 | ❌ | ~1.3× |
 
-> `tp` 和 `hsdp` **不兼容**，不可同时使用。
+> `tp` and `hsdp` are **incompatible** and cannot be used together.
 
-### 内存优化
+### Memory Optimization
 
-| 特性 ID | 说明 | GPU 需求 | 有损? | 备注 |
-|---------|------|----------|-------|------|
-| `cpu_offload` | 模块级 CPU 卸载（DiT + 文本编码器） | ×1 | ❌ | 仅单卡 |
-| `layerwise_offload` | 逐层 CPU 卸载（每次仅保留 1 个 block 在 GPU） | ×1 | ❌ | 仅单卡 |
-| `vae_patch_parallel` ⚠️ | VAE patch 并行解码 | —（复用并行基线的 GPU） | ❌ | **addon-only**，见下方说明 |
-| `fp8` | FP8 量化（Ada/Hopper W8A8） | ×1 | ✅(轻微) | 不兼容 gguf |
-| `gguf` | GGUF 量化（Q4/Q8 等） | ×1 | ✅(轻微) | 不兼容 fp8 |
+| Feature ID | Description | GPU Requirement | Lossy? | Notes |
+|------------|-------------|-----------------|--------|-------|
+| `cpu_offload` | Module-level CPU offloading (DiT + text encoder) | ×1 | ❌ | Single-GPU only |
+| `layerwise_offload` | Layer-wise CPU offloading (keeps only 1 block on GPU at a time) | ×1 | ❌ | Single-GPU only |
+| `vae_patch_parallel` ⚠️ | VAE patch parallel decoding | — (reuses GPUs from parallel baseline) | ❌ | **addon-only**, see note below |
+| `fp8` | FP8 quantization (Ada/Hopper W8A8) | ×1 | ✅ (slight) | Incompatible with gguf |
+| `gguf` | GGUF quantization (Q4/Q8, etc.) | ×1 | ✅ (slight) | Incompatible with fp8 |
 
-> `cpu_offload`（逐层）和 `vae_patch_parallel` **不兼容**。  
-> `fp8` 和 `gguf` **不兼容**。
+> `layerwise_offload` and `vae_patch_parallel` are **incompatible**.  
+> `fp8` and `gguf` are **incompatible**.
 
-#### vae_patch_parallel 特殊说明
+#### Special Notes on vae_patch_parallel
 
-`vae_patch_parallel` 是 **addon-only** 特性，**不能**单独作为 `--baseline-feature` 使用。  
-`--vae-patch-parallel-size` 必须等于基线并行方法的 parallel size 乘积：
+`vae_patch_parallel` is an **addon-only** feature and **cannot** be used as a standalone `--baseline-feature`.  
+`--vae-patch-parallel-size` must equal the product of the parallel sizes of the baseline parallel method:
 
 ```bash
-# ✅ 正确：vae_patch_parallel 作为 addon，叠加在 tp (×2) 之上
+# ✅ Correct: vae_patch_parallel as addon stacked on top of tp (×2)
 python run_compat_test.py \
     --baseline-feature tp \
     --addons vae_patch_parallel \
     --model Qwen/Qwen-Image
 
-# ✅ 正确：叠加在 cfg_parallel (×2) 之上
+# ✅ Correct: stacked on top of cfg_parallel (×2)
 python run_compat_test.py \
     --baseline-feature cfg_parallel \
     --addons vae_patch_parallel \
     --model Qwen/Qwen-Image
 
-# ❌ 错误：不能单独作为 baseline
-python run_compat_test.py --baseline-feature vae_patch_parallel  # 报错
+# ❌ Wrong: cannot be used as a standalone baseline
+python run_compat_test.py --baseline-feature vae_patch_parallel  # raises error
 ```
 
-### 扩展功能
+### Extended Features
 
-| 特性 ID | 说明 | GPU 需求 | 有损? | 备注 |
-|---------|------|----------|-------|------|
-| `lora` | LoRA 推理适配器 | ×1 | ❌ | 需要 `--lora-path` |
+| Feature ID | Description | GPU Requirement | Lossy? | Notes |
+|------------|-------------|-----------------|--------|-------|
+| `lora` | LoRA inference adapter | ×1 | ❌ | Requires `--lora-path` |
 
-## ⛔ 冲突规则
+## ⛔ Conflict Rules
 
-以下特性组合**不兼容**。当测试矩阵中出现冲突组合时，该 test case 会自动标记为 `SKIP (conflict)` 并跳过，**不计入失败**。
+The following feature combinations are **incompatible**. When a conflicting combination appears in the test matrix, the test case is automatically marked as `SKIP (conflict)` and skipped — **it does not count as a failure**.
 
-| 特性 A | 特性 B | 原因 |
-|--------|--------|------|
-| `tp` | `hsdp` | Tensor Parallel 和 HSDP 不兼容 |
-| `teacache` | `cache_dit` | 两种缓存方法不可同时开启 |
-| `layerwise_offload` | `cpu_offload` | 两种 CPU 卸载方法不兼容 |
-| `fp8` | `gguf` | 两种量化方法不兼容 |
-| `layerwise_offload` | 任何多卡特性 | 逐层卸载目前仅支持单卡（`gpu_multiplier > 1` 的特性均冲突） |
+| Feature A | Feature B | Reason |
+|-----------|-----------|--------|
+| `tp` | `hsdp` | Tensor Parallel and HSDP are not compatible |
+| `teacache` | `cache_dit` | Two cache methods cannot be enabled simultaneously |
+| `layerwise_offload` | `cpu_offload` | Two CPU offloading methods are incompatible |
+| `fp8` | `gguf` | Two quantization methods are incompatible |
+| `layerwise_offload` | any multi-GPU feature | Layer-wise offloading currently supports single-GPU only (all features with `gpu_multiplier > 1` conflict) |
 
-多卡特性（`gpu_multiplier > 1`）包括：`cfg_parallel`、`ulysses`、`ring`、`tp`、`hsdp`。
+Multi-GPU features (`gpu_multiplier > 1`) include: `cfg_parallel`, `ulysses`, `ring`, `tp`, `hsdp`.
 
-### 冲突检测示例
+### Conflict Detection Example
 
 ```
-# 运行时终端输出：
+# Runtime terminal output:
 [WARN]  SKIP 'tp+hsdp'             — Tensor Parallel and HSDP are not compatible
 [WARN]  SKIP 'teacache+cache_dit'  — TeaCache and Cache-DiT are not compatible
 [WARN]  SKIP 'fp8+gguf'            — FP8 quantization and GGUF quantization are not compatible
 [WARN]  SKIP 'layerwise_offload+tp'— 'layerwise_offload' supports single-card only and cannot
                                       be combined with multi-GPU feature(s): ['tp']
 
-# 最终汇总区分冲突跳过 vs. GPU 不足跳过：
+# Final summary distinguishes conflict skips vs. insufficient-GPU skips:
   SKIP (conflict)  : 2  (incompatible feature pairs)
   SKIP (GPU)       : 1  (insufficient GPUs)
   SKIP total       : 3  (configs, not prompts)
 ```
 
-### 扩展冲突规则
+### Extending Conflict Rules
 
-在 `run_compat_test.py` 中的 `CONFLICT_RULES` 列表添加条目即可：
+Add entries to the `CONFLICT_RULES` list in `run_compat_test.py`:
 
 ```python
 CONFLICT_RULES: list[tuple[str, str, str]] = [
@@ -145,22 +145,22 @@ CONFLICT_RULES: list[tuple[str, str, str]] = [
     ("teacache",         "cache_dit",     "TeaCache and Cache-DiT are not compatible"),
     ("layerwise_offload","cpu_offload",   "Layerwise and module-level CPU offloading are not compatible"),
     ("fp8",              "gguf",          "FP8 and GGUF quantization are not compatible"),
-    # 新增：
-    ("my_feature_a",     "my_feature_b",  "描述原因"),
+    # Add new entry:
+    ("my_feature_a",     "my_feature_b",  "Describe the reason"),
 ]
 ```
 
-如果某特性仅支持单卡，将其加入 `SINGLE_CARD_ONLY`：
+If a feature only supports single-GPU, add it to `SINGLE_CARD_ONLY`:
 
 ```python
 SINGLE_CARD_ONLY: frozenset[str] = frozenset({"layerwise_offload", "my_single_card_feature"})
 ```
 
-## 📖 使用场景
+## 📖 Usage Scenarios
 
-### 场景 1: 新特性开发
+### Scenario 1: New Feature Development
 
-在开发新特性后，快速验证与现有特性的兼容性：
+After developing a new feature, quickly verify compatibility with existing features:
 
 ```bash
 python run_compat_test.py \
@@ -170,23 +170,23 @@ python run_compat_test.py \
     --steps 30
 ```
 
-### 场景 2: 内存优化验证
+### Scenario 2: Memory Optimization Verification
 
 ```bash
-# 验证 FP8 量化不影响图像质量
+# Verify FP8 quantization does not affect image quality
 python run_compat_test.py \
     --baseline-feature fp8 \
     --addons cfg_parallel \
     --model Qwen/Qwen-Image-2512 \
     --num-prompts 10 --steps 20
 
-# 验证逐层 CPU 卸载
+# Verify layer-wise CPU offloading
 python run_compat_test.py \
     --baseline-feature layerwise_offload \
     --num-prompts 5 --steps 10
 ```
 
-### 场景 3: LoRA 推理验证
+### Scenario 3: LoRA Inference Verification
 
 ```bash
 python run_compat_test.py \
@@ -196,40 +196,40 @@ python run_compat_test.py \
     --num-prompts 10 --steps 20
 ```
 
-### 场景 4: 性能优化对比
+### Scenario 4: Performance Optimization Comparison
 
 ```bash
-# 优化前
+# Before optimization
 python run_compat_test.py --baseline-feature cfg_parallel \
     --output-dir ./before_optimization
 
-# 优化后
+# After optimization
 python run_compat_test.py --baseline-feature cfg_parallel \
     --output-dir ./after_optimization
 
-# 对比
+# Compare
 python compare_results.py \
     ./before_optimization/cfg_parallel/report.json \
     ./after_optimization/cfg_parallel/report.json \
     --best
 ```
 
-### 场景 5: 验证冲突跳过
+### Scenario 5: Verify Conflict Skipping
 
-当不兼容的特性组合出现时，test case 会自动跳过（不计为失败）：
+When an incompatible feature combination appears, the test case is automatically skipped (not counted as a failure):
 
 ```bash
-# teacache 和 cache_dit 不兼容 → cfg+teacache+cache_dit 被自动跳过
+# teacache and cache_dit are incompatible → cfg+teacache+cache_dit is automatically skipped
 python run_compat_test.py \
     --baseline-feature teacache \
     --addons cache_dit \
     --model Qwen/Qwen-Image-2512
 
-# 终端输出示例：
+# Example terminal output:
 # [WARN]  SKIP 'teacache+cache_dit' — TeaCache and Cache-DiT are not compatible
 ```
 
-### 场景 7: CI/CD 集成
+### Scenario 7: CI/CD Integration
 
 ```bash
 python run_compat_test.py \
@@ -242,73 +242,73 @@ python run_compat_test.py \
 python analyze_compat_results.py --results-dir ./ci_test/cfg_parallel
 ```
 
-## 🔧 工具说明
+## 🔧 Tools
 
-### 核心工具
+### Core Tools
 
-| 工具 | 功能 | 输入 | 输出 |
-|------|------|------|------|
-| `batch_text_to_image.py` | 批量图像生成 | 提示词文件 | 图片 + 时间统计 |
-| `run_compat_test.py` | 兼容性测试执行 | 特性配置 | 测试结果目录 |
-| `analyze_compat_results.py` | 结果分析 | 测试结果目录 | JSON 报告 + 图表 |
-| `diagnose_diff.py` | 图像差异诊断 | 测试结果目录 | 差异报告（终端 + JSON） |
-| `compare_results.py` | 多结果对比 | 多个 JSON 报告 | 对比分析 |
+| Tool | Function | Input | Output |
+|------|----------|-------|--------|
+| `batch_text_to_image.py` | Batch image generation | Prompt file | Images + timing stats |
+| `run_compat_test.py` | Compatibility test execution | Feature configuration | Test results directory |
+| `analyze_compat_results.py` | Results analysis | Test results directory | JSON report + charts |
+| `diagnose_diff.py` | Image difference diagnosis | Test results directory | Diff report (terminal + JSON) |
+| `compare_results.py` | Multi-result comparison | Multiple JSON reports | Comparative analysis |
 
-### diagnose_diff.py 参数
+### diagnose_diff.py Arguments
 
-| 参数 | 说明 |
-|------|------|
-| `--results-dir PATH` | 结果目录（含 `baseline/` 和各配置子目录） |
-| `--config NAME...` | 要诊断的一个或多个配置名称 |
-| `--all` | 自动发现并诊断目录下所有非参考配置 |
-| `--reference NAME` | 参考配置名称（默认 `baseline`） |
-| `--top N` | 每个配置最多展示 N 张最差图片（默认 10） |
-| `--save-json` | 每个配置保存一份 JSON 报告 |
+| Argument | Description |
+|----------|-------------|
+| `--results-dir PATH` | Results directory (containing `baseline/` and config subdirectories) |
+| `--config NAME...` | One or more configuration names to diagnose |
+| `--all` | Auto-discover and diagnose all non-reference configs in the directory |
+| `--reference NAME` | Reference configuration name (default: `baseline`) |
+| `--top N` | Show at most N worst images per configuration (default: 10) |
+| `--save-json` | Save a JSON report for each configuration |
 
-> SSIM 指标需要 `pip install scikit-image`，未安装时自动降级为 MeanDiff/MaxDiff。
+> SSIM metric requires `pip install scikit-image`; falls back to MeanDiff/MaxDiff if not installed.
 
-## 📊 输出说明
+## 📊 Output Structure
 
-### 测试结果结构
+### Test Results Directory Layout
 
 ```
 compat_results/
-└── cfg_parallel/                    # 基线特性目录
-    ├── manifest.json                # 测试元数据
-    ├── report.json                  # 分析报告（运行 analyze 后生成）
-    ├── chart_quality.png            # 质量对比图表
-    ├── chart_speedgain.png          # 性能对比图表
-    ├── baseline/                    # 纯基线配置
-    │   ├── batch_generation.log     # 批量生成日志
+└── cfg_parallel/                    # Baseline feature directory
+    ├── manifest.json                # Test metadata
+    ├── report.json                  # Analysis report (generated after running analyze)
+    ├── chart_quality.png            # Quality comparison chart
+    ├── chart_speedgain.png          # Performance comparison chart
+    ├── baseline/                    # Pure baseline configuration
+    │   ├── batch_generation.log     # Batch generation log
     │   ├── batch_generation.exitcode
     │   ├── prompt_00.png
     │   ├── prompt_00.exitcode
     │   └── ...
-    ├── cfg_parallel/                # 基线特性单独运行
-    └── cfg_parallel+teacache/       # 组合特性运行
+    ├── cfg_parallel/                # Baseline feature run alone
+    └── cfg_parallel+teacache/       # Combined feature run
 ```
 
-### 关键指标
+### Key Metrics
 
-- **Speedup**: 相对于纯基线的加速比
-- **MeanDiff**: 平均像素差异（0–1，越小越好）
-- **MaxDiff**: 最大像素差异（0–1）
-- **SSIM**: 结构相似性（0–1，越大越好；需 scikit-image）
+- **Speedup**: speedup relative to the pure baseline
+- **MeanDiff**: mean pixel difference (0–1, lower is better)
+- **MaxDiff**: maximum pixel difference (0–1)
+- **SSIM**: structural similarity (0–1, higher is better; requires scikit-image)
 - **Status**: OK ✅ / WARN ⚠️ / LARGE ❌
 
-## 🔍 常见问题
+## 🔍 FAQ
 
-### Q: 为什么配置被跳过？
+### Q: Why is a configuration being skipped?
 
 ```
 SKIP 'cfg_parallel+ulysses' — requires 4 GPUs, only 2 available
 ```
 
-**A**: GPU 数量不足。减少特性组合或使用更多 GPU。
+**A**: Insufficient GPUs. Reduce the number of feature combinations or use more GPUs.
 
-### Q: LoRA 测试怎么运行？
+### Q: How do I run LoRA tests?
 
-**A**: 提供 `--lora-path` 参数：
+**A**: Provide the `--lora-path` argument:
 
 ```bash
 python run_compat_test.py \
@@ -317,9 +317,9 @@ python run_compat_test.py \
     --model Tongyi-MAI/Z-Image-Turbo
 ```
 
-### Q: HSDP 和 TP 不兼容怎么办？
+### Q: What should I do about HSDP and TP incompatibility?
 
-**A**: HSDP 不能与 `--tensor-parallel-size > 1` 或 data parallelism 同时使用。单独测试：
+**A**: HSDP cannot be used together with `--tensor-parallel-size > 1` or data parallelism. Test them separately:
 
 ```bash
 python run_compat_test.py \
@@ -328,56 +328,56 @@ python run_compat_test.py \
     --num-prompts 5 --steps 10
 ```
 
-### Q: 如何加快测试速度？
+### Q: How can I speed up the tests?
 
-**A**: 使用以下参数：
-- `--num-prompts 3` — 减少提示词数量
-- `--steps 10` — 减少推理步数
-- `--height 512 --width 512` — 减小图像尺寸
+**A**: Use the following arguments:
+- `--num-prompts 3` — reduce number of prompts
+- `--steps 10` — reduce number of inference steps
+- `--height 512 --width 512` — reduce image resolution
 
-### Q: WARN 状态是否需要关注？
+### Q: Should I be concerned about WARN status?
 
-**A**: WARN 通常出现在有损特性（TeaCache、Cache-DiT、FP8、GGUF）上，质量损失在可接受范围内。
+**A**: WARN typically appears for lossy features (TeaCache, Cache-DiT, FP8, GGUF); the quality loss is within an acceptable range.
 
-### Q: 如何添加新特性？
+### Q: How do I add a new feature?
 
-**A**: 在 `run_compat_test.py` 的 `FEATURE_REGISTRY` 中添加条目：
+**A**: Add an entry to `FEATURE_REGISTRY` in `run_compat_test.py`:
 
 ```python
 "my_feature": {
     "args": ["--my-arg", "value"],
-    "gpu_multiplier": 1,    # GPU 倍增系数
-    "lossy": False,         # 是否有损
-    "label": "My Feature",  # 显示名称
-    "category": "parallelism",  # 类别
+    "gpu_multiplier": 1,    # GPU multiplier
+    "lossy": False,         # whether lossy
+    "label": "My Feature",  # display name
+    "category": "parallelism",  # category
     "note": "Brief description.",
 },
 ```
 
-## 📈 性能基准参考
+## 📈 Performance Benchmark Reference
 
-基于 20 个提示词，30 推理步数，1024×1024，Qwen/Qwen-Image-2512：
+Based on 20 prompts, 30 inference steps, 1024×1024, Qwen/Qwen-Image-2512:
 
-| 配置 | 平均时间 | 加速比 | 质量损失（MeanDiff） |
-|------|----------|--------|----------------------|
-| 纯基线 | 10.2s | 1.0× | — |
+| Configuration | Avg Time | Speedup | Quality Loss (MeanDiff) |
+|---------------|----------|---------|-------------------------|
+| Pure baseline | 10.2s | 1.0× | — |
 | CFG Parallel | 5.6s | 1.82× | 0.0000 |
 | CFG + TeaCache | 2.9s | 3.52× | 0.0823 |
 | CFG + Cache-DiT | 2.7s | 3.78× | 0.1124 |
 | FP8 | 7.1s | 1.44× | ~0.01 |
 
-*实际性能因硬件和配置而异*
+*Actual performance varies by hardware and configuration*
 
-## 🤝 贡献
+## 🤝 Contributing
 
-### 添加新特性
+### Adding a New Feature
 
-1. 在 `run_compat_test.py` 的 `FEATURE_REGISTRY` 中注册
-2. 如需新 CLI 参数，在 `batch_text_to_image.py` 中添加
-3. 运行测试验证，提交 PR
+1. Register in `FEATURE_REGISTRY` in `run_compat_test.py`
+2. If new CLI arguments are needed, add them in `batch_text_to_image.py`
+3. Run tests to verify and submit a PR
 
-### 改进文档
+### Improving Documentation
 
-1. 更新本 README 和相关 Markdown 文件
-2. 确保示例代码可运行
-3. 提交 PR
+1. Update this README and related Markdown files
+2. Ensure example code is runnable
+3. Submit a PR

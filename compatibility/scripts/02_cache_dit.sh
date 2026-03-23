@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ── Row 2: Cache-DiT ─────────────────────────────────────────────────────────
-# 兼容性矩阵第 2 行：以 cache_dit 为基线，单独冒烟测试。
-# 矩阵中该行暂无 🙋 待测组合（teacache 与其冲突，二者互斥）。
+# Compatibility matrix row 2: smoke test with cache_dit as the baseline only.
+# No addon combinations to test in this row (teacache conflicts with cache_dit; they are mutually exclusive).
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/02_cache_dit.sh
 #   MODEL=Tongyi-MAI/Z-Image-Turbo bash compatibility/scripts/02_cache_dit.sh
 # ─────────────────────────────────────────────────────────────────────────────

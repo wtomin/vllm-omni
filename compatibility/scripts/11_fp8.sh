@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # ── Row 10: FP8 Quant ────────────────────────────────────────────────────────
-# 兼容性矩阵第 10 行：以 fp8 为基线，测试与所有其余 🙋 特性的组合。
-# FP8 本身仅需 1 GPU；搭配并行特性时按各特性的 gpu_multiplier 累乘。
+# Compatibility matrix row 10: fp8 as baseline, test combinations with all remaining features.
+# FP8 itself requires only 1 GPU; combined with parallel features the gpu_multiplier is multiplied accordingly.
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache           — FP8 + TeaCache
 #   cache_dit          — FP8 + Cache-DiT
-#   ulysses            — FP8 + Ulysses-SP          (需 2 GPU)
-#   ring               — FP8 + Ring-Attn            (需 2 GPU)
-#   cfg_parallel       — FP8 + CFG-Parallel         (需 2 GPU)
-#   tp                 — FP8 + Tensor Parallel       (需 2 GPU)
-#   hsdp               — FP8 + HSDP                 (需 2 GPU)
-#   layerwise_offload  — FP8 + Layerwise Offload     (单卡；多卡组合自动跳过)
-#   vae_patch_parallel — FP8 + VAE Patch Parallel    (需并行基线提供 >1 rank)
+#   ulysses            — FP8 + Ulysses-SP          (requires 2 GPUs)
+#   ring               — FP8 + Ring-Attn            (requires 2 GPUs)
+#   cfg_parallel       — FP8 + CFG-Parallel         (requires 2 GPUs)
+#   tp                 — FP8 + Tensor Parallel       (requires 2 GPUs)
+#   hsdp               — FP8 + HSDP                 (requires 2 GPUs)
+#   layerwise_offload  — FP8 + Layerwise Offload     (single-GPU; multi-GPU combos auto-skipped)
+#   vae_patch_parallel — FP8 + VAE Patch Parallel    (requires parallel baseline providing >1 rank)
 #
-# 注：多方并行组合（如 fp8+ulysses+ring）可能需要 4 GPU；
-#     GPU 不足时框架自动标记 SKIP (GPU)。
+# Note: multi-parallel combinations (e.g. fp8+ulysses+ring) may require 4 GPUs;
+#       the framework auto-marks SKIP (GPU) when GPUs are insufficient.
 #
-# 用法:
-#   bash compatibility/scripts/10_fp8.sh
+# Usage:
+#   bash compatibility/scripts/11_fp8.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ── Row 1: TeaCache ──────────────────────────────────────────────────────────
-# 兼容性矩阵第 1 行：以 teacache 为基线，单独冒烟测试。
-# 矩阵中该行暂无 🙋 待测组合（cache_dit 与其冲突）。
+# Compatibility matrix row 1: smoke test with teacache as the baseline only.
+# No addon combinations to test in this row (cache_dit conflicts with teacache).
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/01_teacache.sh
 #   MODEL=Tongyi-MAI/Z-Image-Turbo bash compatibility/scripts/01_teacache.sh
 # ─────────────────────────────────────────────────────────────────────────────

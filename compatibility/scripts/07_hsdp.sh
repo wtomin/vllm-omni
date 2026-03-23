@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # ── Row 7: HSDP ──────────────────────────────────────────────────────────────
-# 兼容性矩阵第 7 行：以 hsdp 为基线，测试与缓存加速、序列并行、CFG 并行的组合。
-# 需要 ≥2 GPU（hsdp gpu_multiplier=2）；多组合时可能需要 4 GPU。
+# Compatibility matrix row 7: hsdp as baseline, test combinations with cache, sequence parallel, and CFG parallel features.
+# Requires ≥2 GPUs (hsdp gpu_multiplier=2); multi-feature combinations may require 4 GPUs.
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache      — HSDP + TeaCache
 #   cache_dit     — HSDP + Cache-DiT
-#   ulysses       — HSDP + Ulysses-SP      (需 4 GPU)
-#   ring          — HSDP + Ring-Attn       (需 4 GPU)
-#   cfg_parallel  — HSDP + CFG-Parallel    (需 4 GPU)
+#   ulysses       — HSDP + Ulysses-SP      (requires 4 GPUs)
+#   ring          — HSDP + Ring-Attn       (requires 4 GPUs)
+#   cfg_parallel  — HSDP + CFG-Parallel    (requires 4 GPUs)
 #
-# ❌ 已知冲突（自动跳过）: hsdp + tp
+# ❌ Known conflict (auto-skipped): hsdp + tp
 #
-# 注：GPU 不足时框架自动标记 SKIP (GPU)。
+# Note: the framework auto-marks SKIP (GPU) when GPUs are insufficient.
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/07_hsdp.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail

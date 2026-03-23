@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # ── Row 6: Tensor Parallel ───────────────────────────────────────────────────
-# 兼容性矩阵第 6 行：以 tp 为基线，测试与缓存加速、序列并行、CFG 并行的组合。
-# 需要 ≥2 GPU（tp gpu_multiplier=2）；多组合时可能需要 4 GPU。
+# Compatibility matrix row 6: tp as baseline, test combinations with cache, sequence parallel, and CFG parallel features.
+# Requires ≥2 GPUs (tp gpu_multiplier=2); multi-feature combinations may require 4 GPUs.
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache      — TP + TeaCache
 #   cache_dit     — TP + Cache-DiT
-#   ulysses       — TP + Ulysses-SP      (需 4 GPU)
-#   ring          — TP + Ring-Attn       (需 4 GPU)
-#   cfg_parallel  — TP + CFG-Parallel    (需 4 GPU)
+#   ulysses       — TP + Ulysses-SP      (requires 4 GPUs)
+#   ring          — TP + Ring-Attn       (requires 4 GPUs)
+#   cfg_parallel  — TP + CFG-Parallel    (requires 4 GPUs)
 #
-# ❌ 已知冲突（自动跳过）: tp + hsdp
+# ❌ Known conflict (auto-skipped): tp + hsdp
 #
-# 注：GPU 不足时框架自动标记 SKIP (GPU)。
+# Note: the framework auto-marks SKIP (GPU) when GPUs are insufficient.
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/06_tp.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail

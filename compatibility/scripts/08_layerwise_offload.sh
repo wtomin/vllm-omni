@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ── Row 8: CPU Offloading (Layerwise) ────────────────────────────────────────
-# 兼容性矩阵第 8 行：以 layerwise_offload 为基线，测试与缓存加速特性的组合。
-# 仅支持单卡（SINGLE_CARD_ONLY）；所有多卡特性均已标记 ❌，框架会自动跳过。
+# Compatibility matrix row 8: layerwise_offload as baseline, test combinations with cache acceleration features.
+# Single-GPU only (SINGLE_CARD_ONLY); all multi-GPU features are marked ❌ and auto-skipped by the framework.
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache   — Layerwise Offload + TeaCache
 #   cache_dit  — Layerwise Offload + Cache-DiT
 #
-# ❌ 已知冲突（自动跳过）: layerwise_offload + ulysses/ring/cfg_parallel/tp/hsdp
+# ❌ Known conflicts (auto-skipped): layerwise_offload + ulysses/ring/cfg_parallel/tp/hsdp
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/08_layerwise_offload.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail

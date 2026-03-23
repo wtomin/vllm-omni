@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
 # ── CPU Offload (Module-level) ────────────────────────────────────────────────
-# 以 cpu_offload（模块级 CPU 卸载，DiT + 文本编码器整体卸载）为基线，
-# 测试与缓存加速、并行特性的组合兼容性。
+# Uses cpu_offload (module-level CPU offloading: DiT + text encoder offloaded as whole modules) as baseline,
+# testing compatibility with cache acceleration and parallelism features.
 #
-# 注意：cpu_offload 未列入 SINGLE_CARD_ONLY，框架不会自动排除多卡组合；
-#       实际能否运行取决于硬件，GPU 不足时框架自动标记 SKIP (GPU)。
+# Note: cpu_offload is not listed in SINGLE_CARD_ONLY, so the framework will not auto-exclude multi-GPU combos;
+#       whether they actually run depends on hardware. The framework auto-marks SKIP (GPU) if GPUs are insufficient.
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache      — CPU Offload + TeaCache
 #   cache_dit     — CPU Offload + Cache-DiT
-#   ulysses       — CPU Offload + Ulysses-SP      (需 2 GPU)
-#   ring          — CPU Offload + Ring-Attn       (需 2 GPU)
-#   cfg_parallel  — CPU Offload + CFG-Parallel    (需 2 GPU)
-#   tp            — CPU Offload + Tensor Parallel (需 2 GPU)
-#   hsdp          — CPU Offload + HSDP            (需 2 GPU)
+#   ulysses       — CPU Offload + Ulysses-SP      (requires 2 GPUs)
+#   ring          — CPU Offload + Ring-Attn       (requires 2 GPUs)
+#   cfg_parallel  — CPU Offload + CFG-Parallel    (requires 2 GPUs)
+#   tp            — CPU Offload + Tensor Parallel (requires 2 GPUs)
+#   hsdp          — CPU Offload + HSDP            (requires 2 GPUs)
 #
-# ❌ 已知冲突（自动跳过）: cpu_offload + layerwise_offload
+# ❌ Known conflict (auto-skipped): cpu_offload + layerwise_offload
 #
-# 用法:
-#   bash compatibility/scripts/11_cpu_offload.sh
-#   MODEL=Tongyi-MAI/Z-Image-Turbo bash compatibility/scripts/11_cpu_offload.sh
+# Usage:
+#   bash compatibility/scripts/09_cpu_offload.sh
+#   MODEL=Tongyi-MAI/Z-Image-Turbo bash compatibility/scripts/09_cpu_offload.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

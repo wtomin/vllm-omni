@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
 # ── Row 9: VAE Patch Parallel ─────────────────────────────────────────────────
-# 兼容性矩阵第 9 行：vae_patch_parallel 为 addon-only 特性，不能单独作为 baseline。
+# Compatibility matrix row 9: vae_patch_parallel is an addon-only feature and cannot be used as a standalone baseline.
 #
-# 本脚本将 vae_patch_parallel 叠加在每一个 🙋 并行基线上，分轮运行；
-# 每轮结束后立即对该轮结果调用 analyze_compat_results.py。
-# 每轮还附带 teacache / cache_dit 作为附加 addon，覆盖三方组合。
+# This script stacks vae_patch_parallel on top of each parallel baseline in separate rounds;
+# after each round it immediately calls analyze_compat_results.py on the results.
+# Each round also includes teacache / cache_dit as additional addons to cover three-way combinations.
 #
-# 🙋 待测组合（vae_patch_parallel 作为 addon）:
+# Addon combinations to test (vae_patch_parallel as addon):
 #   cfg_parallel  + vae_patch_parallel [+ teacache / cache_dit]
 #   ulysses       + vae_patch_parallel [+ teacache / cache_dit]
 #   ring          + vae_patch_parallel [+ teacache / cache_dit]
 #   tp            + vae_patch_parallel [+ teacache / cache_dit]
 #   hsdp          + vae_patch_parallel [+ teacache / cache_dit]
 #
-# ❌ 已知冲突（自动跳过）: vae_patch_parallel + layerwise_offload
+# ❌ Known conflict (auto-skipped): vae_patch_parallel + layerwise_offload
 #
-# 注：所有并行基线均需 ≥2 GPU；多方并行组合可能需要 4 GPU。
+# Note: all parallel baselines require ≥2 GPUs; multi-parallel combinations may require 4 GPUs.
 #
-# 用法:
-#   bash compatibility/scripts/09_vae_patch_parallel.sh
+# Usage:
+#   bash compatibility/scripts/10_vae_patch_parallel.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

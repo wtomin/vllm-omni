@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ── Row 4: Ring-Attn ─────────────────────────────────────────────────────────
-# 兼容性矩阵第 4 行：以 ring 为基线，测试与缓存加速特性的组合。
-# 需要 ≥2 GPU（ring gpu_multiplier=2）。
+# Compatibility matrix row 4: ring as baseline, test combinations with cache acceleration features.
+# Requires ≥2 GPUs (ring gpu_multiplier=2).
 #
-# ✅ 已验证: ring + ulysses（矩阵中标记为 ✅，不在本脚本重跑）
+# ✅ Already verified: ring + ulysses (marked ✅ in the matrix; not re-run here)
 #
-# 🙋 待测组合（addons）:
+# Addon combinations to test:
 #   teacache   — Ring + TeaCache
 #   cache_dit  — Ring + Cache-DiT
 #
-# 用法:
+# Usage:
 #   bash compatibility/scripts/04_ring.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
