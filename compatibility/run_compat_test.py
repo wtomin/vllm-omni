@@ -491,15 +491,22 @@ def run_batch_prompts(
         print(f"    DRY-RUN: {' '.join(cmd)}")
         return num_prompts, 0
 
-    # Run batch generation
+    # Run batch generation, streaming output to screen and log file simultaneously
     t0 = time.monotonic()
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    output_chunks: list[bytes] = []
+    with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as proc:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.buffer.write(line)
+            sys.stdout.buffer.flush()
+            output_chunks.append(line)
+        proc.wait()
+        rc = proc.returncode
     elapsed_ms = (time.monotonic() - t0) * 1_000
-    rc = result.returncode
 
     # Save batch log
     batch_log_path = cfg_dir / "batch_generation.log"
-    batch_log_path.write_bytes(result.stdout)
+    batch_log_path.write_bytes(b"".join(output_chunks))
 
     # Save batch exit code
     batch_rc_path = cfg_dir / "batch_generation.exitcode"
@@ -507,9 +514,6 @@ def run_batch_prompts(
 
     if rc != 0:
         _log(f"BATCH FAIL (rc={rc})", "FAIL")
-        tail = result.stdout.decode(errors="replace").splitlines()[-10:]
-        for ln in tail:
-            print(f"      │ {ln}")
         return 0, num_prompts
 
     # Rename generated images from image_NNNN.png to prompt_NN.png
