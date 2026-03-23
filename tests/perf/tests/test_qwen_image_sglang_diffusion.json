@@ -1,15 +1,12 @@
 [
     {
-        "test_name": "test_sglang_qwen_image_ulysses2_cfg2",
-        "description": "sglang: USP=2 + CFG-parallel=2 ",
+        "test_name": "test_sglang_qwen_image_single_device",
+        "description": "sglang: single-device baseline (no parallelism)",
         "server_type": "sglang",
         "server_params": {
             "model": "Qwen/Qwen-Image",
             "serve_args": {
-                "num-gpus": 4,
-                "sp-degree": 2,
-                "ulysses-degree": 2,
-                "enable-cfg-parallel": true,
+                "num-gpus": 1,
                 "dit-cpu-offload": false,
                 "text-encoder-cpu-offload": false,
                 "vae-cpu-offload": false

@@ -1,13 +1,11 @@
 [
     {
-        "test_name": "test_qwen_image_ulysses2_cfg2",
-        "description": "Ulysses SP=2 + CFG-parallel=2 (baseline distributed config)",
+        "test_name": "test_qwen_image_single_device",
+        "description": "Single-device baseline (no parallelism)",
         "server_type": "vllm-omni",
         "server_params": {
             "model": "Qwen/Qwen-Image",
             "serve_args": {
-                "ulysses-degree": 2,
-                "cfg-parallel-size": 2,
                 "enable-diffusion-pipeline-profiler": true
             }
         },
