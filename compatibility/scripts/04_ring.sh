@@ -5,8 +5,9 @@
 #
 # ✅ Already verified: ring + ulysses (marked ✅ in the matrix; not re-run here)
 #
+# ❌ Known conflict (auto-skipped): ring + teacache (SP and TeaCache are not compatible, probably due to bugs in the implementation)
+#
 # Addon combinations to test:
-#   teacache   — Ring + TeaCache
 #   cache_dit  — Ring + Cache-DiT
 #
 # Usage:
@@ -23,12 +24,12 @@ OUTPUT_DIR="${OUTPUT_DIR:-./compat_results}"
 CHARTS="${CHARTS:-1}"
 
 echo "======================================================================"
-echo "Row 4 | baseline: ring | addons: teacache cache_dit"
+echo "Row 4 | baseline: ring | addons: cache_dit"
 echo "======================================================================"
 
 python "${SCRIPT_DIR}/../run_compat_test.py" \
     --baseline-feature ring \
-    --addons teacache cache_dit \
+    --addons cache_dit \
     --model "${MODEL}" \
     --num-prompts "${NUM_PROMPTS}" \
     --steps "${STEPS}" \
