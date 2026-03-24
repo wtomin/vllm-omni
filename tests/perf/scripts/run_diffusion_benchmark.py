@@ -76,11 +76,8 @@ def _get_config_file_from_argv() -> str | None:
 
 CONFIG_FILE_PATH = _get_config_file_from_argv()
 if CONFIG_FILE_PATH is None:
-    raise ValueError(
-        "--config-file is required. Pass the path to a benchmark config JSON, e.g.:\n"
-        "  pytest run_diffusion_benchmark.py "
-        "--config-file tests/perf/tests/test_qwen_image_vllm_omni.json"
-    )
+    print("No config file provided, using default config file: tests/perf/tests/test_qwen_image_vllm_omni.json")
+    CONFIG_FILE_PATH = "tests/perf/tests/test_qwen_image_vllm_omni.json"
 
 # ---------------------------------------------------------------------------
 # Config loading
