@@ -1,12 +1,19 @@
 [
     {
-        "test_name": "test_qwen_image_single_device",
-        "description": "Single-device baseline (no parallelism)",
-        "server_type": "vllm-omni",
+        "test_name": "test_sglang_qwen_image_single_device",
+        "description": "sglang: single-device baseline (no parallelism)",
+        "server_type": "sglang",
         "server_params": {
             "model": "Qwen/Qwen-Image",
             "serve_args": {
-                "enable-diffusion-pipeline-profiler": true
+                "num-gpus": 1,
+                "attention-backend": "fa3",
+                "enable-torch-compile": true,
+                "dit-cpu-offload": false,
+                "dit-layerwise-offload": false,
+                "image-encoder-cpu-offload": false,
+                "text-encoder-cpu-offload": false,
+                "vae-cpu-offload": false
             }
         },
         "benchmark_params": [
@@ -21,9 +28,10 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.30,
-                    "latency_mean": 3.50,
-                    "peak_memory_mb_mean": 67000
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
                 }
             },
             {
@@ -37,25 +45,33 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.037,
-                    "latency_mean": 27.0,
-                    "peak_memory_mb_mean": 74000
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
                 }
             }
         ]
     },
     {
-        "test_name": "test_qwen_image_ulysses2_cfg2_vae_patch4",
-        "description": "Ulysses SP=2 + CFG-parallel=2 + VAE Patch Parallel=4",
-        "server_type": "vllm-omni",
+        "test_name": "test_sglang_qwen_image_ulysses2_cfg2_vae_patch4",
+        "description": "sglang: USP=2 + CFG-parallel=2 + VAE patch parallel via --use-parallel-tiling",
+        "server_type": "sglang",
         "server_params": {
             "model": "Qwen/Qwen-Image",
             "serve_args": {
+                "num-gpus": 4,
+                "attention-backend": "fa3",
+                "enable-torch-compile": true,
+                "sp-degree": 2,
                 "ulysses-degree": 2,
-                "cfg-parallel-size": 2,
-                "vae-patch-parallel-size": 4,
-                "vae-use-tiling": true,
-                "enable-diffusion-pipeline-profiler": true
+                "enable-cfg-parallel": true,
+                "use-parallel-tiling": true,
+                "dit-cpu-offload": false,
+                "dit-layerwise-offload": false,
+                "image-encoder-cpu-offload": false,
+                "text-encoder-cpu-offload": false,
+                "vae-cpu-offload": false
             }
         },
         "benchmark_params": [
@@ -70,9 +86,10 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.1,
-                    "latency_mean": 2.34,
-                    "peak_memory_mb_mean": 61000
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
                 }
             },
             {
@@ -86,24 +103,22 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.1,
-                    "latency_mean": 9.1,
-                    "peak_memory_mb_mean": 61000
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
                 }
             }
         ]
     },
     {
-        "test_name": "test_qwen_image_ulysses2_cfg2_cache_dit",
-        "description": "Ulysses SP=2 + CFG-parallel=2 + CacheDiT acceleration",
-        "server_type": "vllm-omni",
+        "test_name": "test_sglang_qwen_image_ulysses2_cfg2_cache_dit",
+        "description": "sglang: USP=2 + CFG-parallel=2 + Cache-DiT via YAML config (--cache-dit-config)",
+        "server_type": "sglang",
         "server_params": {
             "model": "Qwen/Qwen-Image",
-            "serve_args": {
-                "ulysses-degree": 2,
-                "cfg-parallel-size": 2,
-                "cache-backend": "cache_dit",
-                "cache-config": {
+            "cache_dit_config": {
+                "cache_config": {
                     "Fn_compute_blocks": 1,
                     "Bn_compute_blocks": 0,
                     "max_warmup_steps": 4,
@@ -111,10 +126,26 @@
                     "max_continuous_cached_steps": 3,
                     "enable_taylorseer": false,
                     "taylorseer_order": 1,
-                    "scm_steps_mask_policy": null,
+                    "scm_steps_mask_policy": "none",
                     "scm_steps_policy": "dynamic"
                 },
-                "enable-diffusion-pipeline-profiler": true
+                "parallelism_config": {
+                    "ulysses_size": 2,
+                    "attention_backend": "native"
+                }
+            },
+            "serve_args": {
+                "num-gpus": 4,
+                "attention-backend": "fa3",
+                "enable-torch-compile": true,
+                "sp-degree": 2,
+                "ulysses-degree": 2,
+                "enable-cfg-parallel": true,
+                "dit-cpu-offload": false,
+                "dit-layerwise-offload": false,
+                "image-encoder-cpu-offload": false,
+                "text-encoder-cpu-offload": false,
+                "vae-cpu-offload": false
             }
         },
         "benchmark_params": [
@@ -129,9 +160,10 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.1,
-                    "latency_mean": 3.50,
-                    "peak_memory_mb_mean": 67000
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
                 }
             },
             {
@@ -145,9 +177,10 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.1,
-                    "latency_mean": 6.15,
-                    "peak_memory_mb_mean": 74000
+                    "throughput_qps": 0.001,
+                    "latency_p99": 1000.0,
+                    "peak_memory_mb_max": 400000,
+                    "peak_memory_mb_mean": 400000
                 }
             }
         ]
