@@ -9,7 +9,8 @@
                 "num-gpus": 1,
                 "dit-cpu-offload": false,
                 "text-encoder-cpu-offload": false,
-                "vae-cpu-offload": false
+                "vae-cpu-offload": false,
+                "enable-torch-compile": true
             }
         },
         "benchmark_params": [

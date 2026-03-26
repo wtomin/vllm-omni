@@ -9,7 +9,8 @@
                 "num-gpus": 1,
                 "dit-cpu-offload": false,
                 "text-encoder-cpu-offload": false,
-                "vae-cpu-offload": false
+                "vae-cpu-offload": false,
+                "enable-torch-compile": true
             }
         },
         "benchmark_params": [
@@ -32,12 +33,12 @@
                 }
             },
             {
-                "name": "1024x1024_steps30_i2i_2img",
+                "name": "1536x1536_steps35_i2i_2img",
                 "dataset": "random",
                 "task": "i2i",
-                "width": 1024,
-                "height": 1024,
-                "num-inference-steps": 30,
+                "width": 1536,
+                "height": 1536,
+                "num-inference-steps": 35,
                 "num-input-images": 2,
                 "num-prompts": 10,
                 "max-concurrency": 1,
@@ -59,9 +60,10 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "random-request-config": [
-                    {"width": 512, "height": 512, "num_inference_steps": 20, "weight": 0.35},
-                    {"width": 768, "height": 768, "num_inference_steps": 25, "weight": 0.40},
-                    {"width": 1024, "height": 1024, "num_inference_steps": 30, "weight": 0.25}
+                    {"width": 512, "height": 512, "num_inference_steps": 20, "weight": 0.15},
+                    {"width": 768, "height": 768, "num_inference_steps": 20, "weight": 0.25},
+                    {"width": 1024, "height": 1024, "num_inference_steps": 25, "weight": 0.45},
+                    {"width": 1536, "height": 1536, "num_inference_steps": 35, "weight": 0.15}
                 ],
                 "baseline": {
                     "throughput_qps": 0.001,
@@ -109,12 +111,12 @@
                 }
             },
             {
-                "name": "1024x1024_steps30_i2i_2img",
+                "name": "1536x1536_steps35_i2i_2img",
                 "dataset": "random",
                 "task": "i2i",
-                "width": 1024,
-                "height": 1024,
-                "num-inference-steps": 30,
+                "width": 1536,
+                "height": 1536,
+                "num-inference-steps": 35,
                 "num-input-images": 2,
                 "num-prompts": 10,
                 "max-concurrency": 1,
@@ -136,9 +138,10 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "random-request-config": [
-                    {"width": 512, "height": 512, "num_inference_steps": 20, "weight": 0.35},
-                    {"width": 768, "height": 768, "num_inference_steps": 25, "weight": 0.40},
-                    {"width": 1024, "height": 1024, "num_inference_steps": 30, "weight": 0.25}
+                    {"width": 512, "height": 512, "num_inference_steps": 20, "weight": 0.15},
+                    {"width": 768, "height": 768, "num_inference_steps": 20, "weight": 0.25},
+                    {"width": 1024, "height": 1024, "num_inference_steps": 25, "weight": 0.45},
+                    {"width": 1536, "height": 1536, "num_inference_steps": 35, "weight": 0.15}
                 ],
                 "baseline": {
                     "throughput_qps": 0.001,
@@ -202,12 +205,12 @@
                 }
             },
             {
-                "name": "1024x1024_steps30_i2i_2img",
+                "name": "1536x1536_steps35_i2i_2img",
                 "dataset": "random",
                 "task": "i2i",
-                "width": 1024,
-                "height": 1024,
-                "num-inference-steps": 30,
+                "width": 1536,
+                "height": 1536,
+                "num-inference-steps": 35,
                 "num-input-images": 2,
                 "num-prompts": 10,
                 "max-concurrency": 1,
@@ -229,9 +232,10 @@
                 "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "random-request-config": [
-                    {"width": 512, "height": 512, "num_inference_steps": 20, "weight": 0.35},
-                    {"width": 768, "height": 768, "num_inference_steps": 25, "weight": 0.40},
-                    {"width": 1024, "height": 1024, "num_inference_steps": 30, "weight": 0.25}
+                    {"width": 512, "height": 512, "num_inference_steps": 20, "weight": 0.15},
+                    {"width": 768, "height": 768, "num_inference_steps": 20, "weight": 0.25},
+                    {"width": 1024, "height": 1024, "num_inference_steps": 25, "weight": 0.45},
+                    {"width": 1536, "height": 1536, "num_inference_steps": 35, "weight": 0.15}
                 ],
                 "baseline": {
                     "throughput_qps": 0.001,
