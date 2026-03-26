@@ -345,6 +345,8 @@ async def async_request_image_sglang(
 
     # Use multipart/form-data for image edits with input images.
     if input.image_paths and len(input.image_paths) > 0:
+        # SGLang image edit uses /v1/images/edits for multipart image payloads.
+        edit_api_url = input.api_url.replace("/v1/images/generations", "/v1/images/edits")
         data = aiohttp.FormData()
         data.add_field("model", input.model)
         data.add_field("prompt", input.prompt)
@@ -356,11 +358,14 @@ async def async_request_image_sglang(
         for key, value in input.extra_body.items():
             data.add_field(key, str(value))
 
+        opened_files = []
         for img_path in input.image_paths:
             if os.path.exists(img_path):
+                image_file = open(img_path, "rb")
+                opened_files.append(image_file)
                 data.add_field(
                     "image",
-                    open(img_path, "rb"),
+                    image_file,
                     filename=os.path.basename(img_path),
                     content_type="application/octet-stream",
                 )
@@ -372,7 +377,7 @@ async def async_request_image_sglang(
                 return output
 
         try:
-            async with session.post(input.api_url, data=data) as response:
+            async with session.post(edit_api_url, data=data) as response:
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
@@ -385,6 +390,9 @@ async def async_request_image_sglang(
         except Exception as e:
             output.error = str(e)
             output.success = False
+        finally:
+            for f in opened_files:
+                f.close()
     else:
         # Use JSON for text-to-image generation.
         payload: dict[str, Any] = {
