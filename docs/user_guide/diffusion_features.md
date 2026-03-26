@@ -137,20 +137,21 @@ The following tables show which models support each feature:
 - ❌: No support plan
 - ❓: Not verified yet and Not Recommended
 
-|  | ⚡TeaCache | ⚡Cache-DiT | 🔀Ulysses-SP | 🔀Ring-Attn | 🔀CFG-Parallel | 🔀Tensor Parallel | 🔀HSDP | 🔀Expert Parallel | 💾CPU Offloading (Layerwise) | 💾VAE Patch Parallel | 💾FP8 Quant | 🔧LoRA Inference |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **⚡TeaCache** | | | | | | | | | | | | |
-| **⚡Cache-DiT** | ❌ | | | | | | | | | | | |
-| **🔀Ulysses-SP** | ✅ | ✅ | | | | | | | | | | |
-| **🔀Ring-Attn** | ✅ | ✅ | ✅ | | | | | | | | | |
-| **🔀CFG-Parallel** | ✅ | ✅ | ✅ | ✅ | | | | | | | | |
-| **🔀Tensor Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | |
-| **🔀HSDP** | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | | | | | |
-| **🔀Expert Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | | |
-| **💾CPU Offloading (Layerwise)** | ❓ | ❓ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | |
-| **💾VAE Patch Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | | | |
-| **💾FP8 Quant** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❓  | ❓ | ✅ | ✅ | | |
-| **🔧LoRA Inference** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | |
+|  | ⚡TeaCache | ⚡Cache-DiT | 🔀Ulysses-SP | 🔀Ring-Attn | 🔀CFG-Parallel | 🔀Tensor Parallel | 🔀HSDP | 🔀Expert Parallel | 💾CPU Offloading (Layerwise) | 💾CPU Offloading (Module-wise) | 💾VAE Patch Parallel | 💾FP8 Quant | 🔧LoRA Inference |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **⚡TeaCache** | | | | | | | | | | | | | |
+| **⚡Cache-DiT** | ❌ | | | | | | | | | | | | |
+| **🔀Ulysses-SP** | ✅ | ✅ | | | | | | | | | | | |
+| **🔀Ring-Attn** | ✅ | ✅ | ✅ | | | | | | | | | | |
+| **🔀CFG-Parallel** | ✅ | ✅ | ✅ | ✅ | | | | | | | | | |
+| **🔀Tensor Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | | |
+| **🔀HSDP** | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | | | | | | |
+| **🔀Expert Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | | | |
+| **💾CPU Offloading (Layerwise)** | ❓ | ❓ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | | |
+| **💾CPU Offloading (Module-wise)** | ✅ | ✅ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | |
+| **💾VAE Patch Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | | | |
+| **💾FP8 Quant** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❓ | ❓ | ✅ | ✅ | ✅ | | |
+| **🔧LoRA Inference** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | |
 
 !!! info
 
