@@ -80,7 +80,7 @@ The following tables show which models support each feature:
 - ❌ = Not supported
 
 > Notes:
-> 1. CPU Offload has two methods: Model-level (default for models with DiT + text encoder) and Layerwise. The tables below show **Layerwise support** only.
+> 1. CPU Offload has two methods: Module-wise (default for models with DiT + text encoder) and Layerwise. The tables below show **Layerwise support** only.
 > 2. The **💾Quantization** column is collapsed for readability. See [Quantization Overview](diffusion/quantization/overview.md) for per-method (FP8, GGUF, …) and per-model support details.
 
 ### ImageGen
