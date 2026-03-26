@@ -7,8 +7,11 @@
             "model": "Qwen/Qwen-Image",
             "serve_args": {
                 "num-gpus": 1,
+                "enable-torch-compile": true,
+                "dit-layerwise-offload": false,
                 "dit-cpu-offload": false,
                 "text-encoder-cpu-offload": false,
+                "image-encoder-cpu-offload": false,
                 "vae-cpu-offload": false
             }
         },
@@ -83,8 +86,11 @@
                 "ulysses-degree": 2,
                 "enable-cfg-parallel": true,
                 "use-parallel-tiling": true,
+                "enable-torch-compile": true,
+                "dit-layerwise-offload": false,
                 "dit-cpu-offload": false,
                 "text-encoder-cpu-offload": false,
+                "image-encoder-cpu-offload": false,
                 "vae-cpu-offload": false
             }
         },
@@ -175,8 +181,11 @@
                 "sp-degree": 2,
                 "ulysses-degree": 2,
                 "enable-cfg-parallel": true,
+                "enable-torch-compile": true,
+                "dit-layerwise-offload": false,
                 "dit-cpu-offload": false,
                 "text-encoder-cpu-offload": false,
+                "image-encoder-cpu-offload": false,
                 "vae-cpu-offload": false
             }
         },
