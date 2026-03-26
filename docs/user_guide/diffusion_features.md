@@ -137,19 +137,20 @@ The following tables show which models support each feature:
 - ❌: No support plan
 - ❓: Not verified yet and Not Recommended
 
-|  | ⚡TeaCache | ⚡Cache-DiT | 🔀Ulysses-SP | 🔀Ring-Attn | 🔀CFG-Parallel | 🔀Tensor Parallel | 🔀HSDP | 🔀Expert Parallel | 💾CPU Offloading (Layerwise) | 💾VAE Patch Parallel | 🔧LoRA Inference |
-|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **⚡TeaCache** | | | | | | | | | | | |
-| **⚡Cache-DiT** | ❌ | | | | | | | | | | |
-| **🔀Ulysses-SP** | ✅ | ✅ | | | | | | | | | |
-| **🔀Ring-Attn** | ✅ | ✅ | ✅ | | | | | | | | |
-| **🔀CFG-Parallel** | ✅ | ✅ | ✅ | ✅ | | | | | | | |
-| **🔀Tensor Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | |
-| **🔀HSDP** | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | | | | |
-| **🔀Expert Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | |
-| **💾CPU Offloading (Layerwise)** | ❓ | ❓ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | |
-| **💾VAE Patch Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | |
-| **🔧LoRA Inference** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | |
+|  | ⚡TeaCache | ⚡Cache-DiT | 🔀Ulysses-SP | 🔀Ring-Attn | 🔀CFG-Parallel | 🔀Tensor Parallel | 🔀HSDP | 🔀Expert Parallel | 💾CPU Offloading (Layerwise) | 💾VAE Patch Parallel | 💾FP8 Quant | 🔧LoRA Inference |
+|---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **⚡TeaCache** | | | | | | | | | | | | |
+| **⚡Cache-DiT** | ❌ | | | | | | | | | | | |
+| **🔀Ulysses-SP** | ✅ | ✅ | | | | | | | | | | |
+| **🔀Ring-Attn** | ✅ | ✅ | ✅ | | | | | | | | | |
+| **🔀CFG-Parallel** | ✅ | ✅ | ✅ | ✅ | | | | | | | | |
+| **🔀Tensor Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | |
+| **🔀HSDP** | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | | | | | |
+| **🔀Expert Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | | |
+| **💾CPU Offloading (Layerwise)** | ❓ | ❓ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | |
+| **💾VAE Patch Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | | | |
+| **💾FP8 Quant** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❓  | ❓ | ✅ | ✅ | | |
+| **🔧LoRA Inference** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | |
 
 !!! info
 
@@ -157,6 +158,7 @@ The following tables show which models support each feature:
     2. TeaCache and Cache-DiT are not compatible.
     3. CPU Offloading (Layerwise) and CPU Offloading (Module-wise) are not compatible.
     4. CPU Offloading (Layerwise) supports single-card for now.
+    5. Using FP8-Quant as an example of qunatization methods.
 
 
 ## Learn More
