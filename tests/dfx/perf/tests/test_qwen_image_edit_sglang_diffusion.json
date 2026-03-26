@@ -7,6 +7,7 @@
             "model": "Qwen/Qwen-Image-Edit",
             "serve_args": {
                 "num-gpus": 1,
+                "attention-backend": "fa3",
                 "enable-torch-compile": true,
                 "dit-cpu-offload": false,
                 "dit-layerwise-offload": false,
@@ -101,6 +102,7 @@
             "model": "Qwen/Qwen-Image-Edit",
             "serve_args": {
                 "num-gpus": 4,
+                "attention-backend": "fa3",
                 "enable-torch-compile": true,
                 "sp-degree": 2,
                 "ulysses-degree": 2,
@@ -216,6 +218,7 @@
             },
             "serve_args": {
                 "num-gpus": 4,
+                "attention-backend": "fa3",
                 "enable-torch-compile": true,
                 "sp-degree": 2,
                 "ulysses-degree": 2,
