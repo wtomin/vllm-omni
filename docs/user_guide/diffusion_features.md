@@ -11,6 +11,7 @@
 ## Overview
 
 vLLM-Omni supports various advanced features for diffusion models:
+
 - Acceleration: **cache methods**, **parallelism methods**
 - Memory optimization: **cpu offloading**, **quantization**
 - Extensions: **LoRA inference**
@@ -42,7 +43,7 @@ Parallelism methods distribute computation across GPUs without quality loss (mat
 | **[HSDP](diffusion/parallelism/hsdp.md)** | Weight sharding via FSDP2, redistributed on-demand at runtime | Very large models (14B+) on limited VRAM, combinable with SP |
 | **[Expert Parallelism](diffusion/parallelism/expert_parallel.md)** | Shards MoE expert MLP blocks across devices | MoE diffusion models (e.g., HunyuanImage3.0) |
 
-**Note:** Some acceleration methods can be combined together for optimized performance. See [Feature Compatibility](feature_compatibility.md) for detailed configuration examples.
+**Note:** Some acceleration methods can be combined together for optimized performance. See [Feature Compatibility Table](#feature-compatibility) and [Feature Compatibility Tutorial](feature_compatibility.md) for detailed configuration examples.
 
 ### Memory Optimization
 
@@ -80,6 +81,7 @@ The following tables show which models support each feature:
 - ❌ = Not supported
 
 > Notes:
+
 > 1. CPU Offload has two methods: Module-wise (default for models with DiT + text encoder) and Layerwise. The tables below show **Layerwise support** only.
 > 2. The **💾Quantization** column is collapsed for readability. See [Quantization Overview](diffusion/quantization/overview.md) for per-method (FP8, GGUF, …) and per-model support details.
 
