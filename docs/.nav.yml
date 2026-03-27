@@ -74,6 +74,7 @@ nav:
       - CPU Offloading: user_guide/diffusion/cpu_offload_diffusion.md
       - LoRA: user_guide/diffusion/lora.md
       - Custom Pipeline: features/custom_pipeline.md
+      - Step Execution: user_guide/diffusion/step_execution.md
     - ComfyUI: features/comfyui.md
 - Developer Guide:
   - General:
