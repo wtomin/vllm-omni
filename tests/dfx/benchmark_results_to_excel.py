@@ -1,58 +1,22 @@
 #!/usr/bin/env python3
-r"""
-Read benchmark JSON result files and generate an Excel spreadsheet.
-
-Usage:
-    python benchmark_results_to_excel.py
-
-Description:
-    This script reads benchmark result JSON files from a user-specified directory,
-    extracts performance metrics, and generates a summary Excel spreadsheet.
-
-Input:
-    - The script will prompt you to enter the path to the results directory.
-    - The directory should contain JSON files with benchmark results.
-    - Supported backend types (determined from filenames): sglang_diffusion, vllm_omni
-
-Output:
-    - The script will prompt you to specify the output Excel file path.
-    - If not specified, defaults to '<results_dir>/benchmark_results_summary.xlsx'.
-    - The Excel file contains the following columns:
-        * backend: The backend type (sglang_diffusion or vllm_omni)
-        * benchmark_params: The name field from benchmark_params
-        * test_name(server_params): The test name
-        * throughput_qps: Queries per second
-        * latency_mean: Mean latency
-        * latency_median: Median latency
-        * latency_p99: P99 latency
-        * latency_p95: P95 latency
-        * latency_p50: P50 latency
-        * peak_memory_mb_max: Maximum peak memory usage (MB)
-        * peak_memory_mb_mean: Mean peak memory usage (MB)
-        * peak_memory_mb_median: Median peak memory usage (MB)
+"""
+Read benchmark result JSON files and generate an Excel summary.
 
 Example:
     $ python benchmark_results_to_excel.py
-    Please enter the results directory path: \path\to\results
+    Please enter the results directory path: \\path\to\results
 
-    Scanning directory: \path\to\results
+    Scanning directory: \\path\to\results
 
     Found X JSON file(s):
       - benchmark_results_test_sglang_diffusion_xxx.json
       - benchmark_results_test_vllm_omni_xxx.json
 
     Please enter the output Excel file path (press Enter to use default):
-    Default: \path\to\results\benchmark_results_summary.xlsx
-    Your choice: \path\to\report.xlsx
+    Default: \\path\to\results\benchmark_results_summary.xlsx
+    Your choice: \\path\to\report.xlsx
 
-    Success! Excel file saved to: \path\to\report.xlsx
-
-Dependencies:
-    - pandas
-    - openpyxl
-
-    Install dependencies with:
-        pip install pandas openpyxl
+    Success! Excel file saved to: \\path\to\report.xlsx
 """
 
 import json
@@ -71,37 +35,118 @@ def load_json_file(file_path):
         return json.load(f)
 
 
-def extract_records(data, backend_type):
-    """Extract records from JSON data."""
-    records = []
+COLUMN_ORDER = [
+    "Model",
+    "Framework",
+    "Hardware",
+    "Deployment",
+    "Task",
+    "Dataset",
+    "resolution",
+    "Parallelism",
+    "max_concurrency",
+    "Cache",
+    "Quantization",
+    "offload",
+    "compile",
+    "Attn_backend",
+    "num_inference_steps",
+    "completed",
+    "failed",
+    "throughput_qps",
+    "latency_mean",
+    "latency_median",
+    "latency_p99",
+    "latency_p95",
+    "latency_p50",
+    "peak_memory_mb_max",
+    "peak_memory_mb_mean",
+    "peak_memory_mb_median",
+    "commit_sha",
+    "build_id",
+    "build_url",
+    "source_file",
+]
 
-    for item in data:
-        # Extract name from benchmark_params
-        benchmark_name = item.get("benchmark_params", {}).get("name", "")
 
-        # Extract test_name
-        test_name = item.get("test_name", "")
+def _infer_framework_from_filename(filename: str) -> str:
+    if "sglang" in filename:
+        return "sglang"
+    if "vllm_omni" in filename:
+        return "vllm-omni"
+    return ""
 
-        # Extract performance metrics from result
-        result = item.get("result", {})
 
-        record = {
-            "backend": backend_type,
-            "benchmark_params": benchmark_name,
-            "test_name(server_params)": test_name,
-            "throughput_qps": result.get("throughput_qps"),
-            "latency_mean": result.get("latency_mean"),
-            "latency_median": result.get("latency_median"),
-            "latency_p99": result.get("latency_p99"),
-            "latency_p95": result.get("latency_p95"),
-            "latency_p50": result.get("latency_p50"),
-            "peak_memory_mb_max": result.get("peak_memory_mb_max"),
-            "peak_memory_mb_mean": result.get("peak_memory_mb_mean"),
-            "peak_memory_mb_median": result.get("peak_memory_mb_median"),
-        }
-        records.append(record)
+def _resolution_from_params(params: dict) -> str:
+    resolutions = []
+    seen = set()
+    width = params.get("width")
+    height = params.get("height")
+    if width and height:
+        res = f"{width}x{height}"
+        seen.add(res)
+        resolutions.append(res)
+    random_cfg = params.get("random-request-config")
+    if isinstance(random_cfg, list):
+        for item in random_cfg:
+            if not isinstance(item, dict):
+                continue
+            rw = item.get("width")
+            rh = item.get("height")
+            if rw and rh:
+                res = f"{rw}x{rh}"
+                if res not in seen:
+                    seen.add(res)
+                    resolutions.append(res)
+    return "|".join(resolutions)
 
-    return records
+
+def _record_to_row(item: dict, filename: str) -> dict:
+    params = item.get("benchmark_params", {}) if isinstance(item.get("benchmark_params"), dict) else {}
+    result = item.get("result", {}) if isinstance(item.get("result"), dict) else {}
+
+    framework = item.get("Framework") or item.get("backend") or _infer_framework_from_filename(filename)
+    completed = item.get("completed")
+    if completed is None:
+        completed = result.get("completed_requests", result.get("completed"))
+    failed = item.get("failed")
+    if failed is None:
+        failed = result.get("failed_requests", result.get("failed"))
+
+    row = {
+        "Model": item.get("Model", ""),
+        "Framework": framework,
+        "Hardware": item.get("Hardware", ""),
+        "Deployment": item.get("Deployment", ""),
+        "Task": item.get("Task", params.get("task", "")),
+        "Dataset": item.get("Dataset", params.get("dataset", "")),
+        "resolution": item.get("resolution", _resolution_from_params(params)),
+        "Parallelism": item.get("Parallelism", ""),
+        "max_concurrency": item.get("max_concurrency", params.get("max-concurrency", "")),
+        "Cache": item.get("Cache", ""),
+        "Quantization": item.get("Quantization", ""),
+        "offload": item.get("offload", ""),
+        "compile": item.get("compile", ""),
+        "Attn_backend": item.get("Attn_backend", ""),
+        "num_inference_steps": item.get("num_inference_steps", params.get("num-inference-steps", "")),
+        "completed": completed,
+        "failed": failed,
+        "throughput_qps": item.get("throughput_qps", result.get("throughput_qps")),
+        "latency_mean": item.get("latency_mean", result.get("latency_mean")),
+        "latency_median": item.get("latency_median", result.get("latency_median")),
+        "latency_p99": item.get("latency_p99", result.get("latency_p99")),
+        "latency_p95": item.get("latency_p95", result.get("latency_p95")),
+        "latency_p50": item.get("latency_p50", result.get("latency_p50")),
+        "peak_memory_mb_max": item.get("peak_memory_mb_max", result.get("peak_memory_mb_max")),
+        "peak_memory_mb_mean": item.get("peak_memory_mb_mean", result.get("peak_memory_mb_mean")),
+        "peak_memory_mb_median": item.get("peak_memory_mb_median", result.get("peak_memory_mb_median")),
+        "commit_sha": item.get("commit_sha", ""),
+        # Export-layer policy: force empty source/build provenance columns.
+        "build_id": "",
+        "build_url": "",
+        "source_file": "",
+    }
+    return row
 
 
 def check_log_files(results_dir):
@@ -164,19 +209,13 @@ def main():
     for json_file in json_files:
         filename = json_file.name
 
-        # Determine backend type based on filename
-        if "sglang_diffusion" in filename:
-            backend_type = "sglang_diffusion"
-        elif "vllm_omni" in filename:
-            backend_type = "vllm_omni"
-        else:
-            print(f"Warning: Cannot determine backend type for {filename}, skipping...")
-            continue
-
         # Load and parse data
         try:
             data = load_json_file(json_file)
-            records = extract_records(data, backend_type)
+            if not isinstance(data, list):
+                print(f"Warning: {filename} is not a list of records, skipping...")
+                continue
+            records = [_record_to_row(item, filename) for item in data if isinstance(item, dict)]
             all_records.extend(records)
             print(f"  Extracted {len(records)} records from {filename}")
         except Exception as e:
@@ -190,23 +229,10 @@ def main():
     # Create DataFrame
     df = pd.DataFrame(all_records)
 
-    # Define column order
-    columns = [
-        "backend",
-        "benchmark_params",
-        "test_name(server_params)",
-        "throughput_qps",
-        "latency_mean",
-        "latency_median",
-        "latency_p99",
-        "latency_p95",
-        "latency_p50",
-        "peak_memory_mb_max",
-        "peak_memory_mb_mean",
-        "peak_memory_mb_median",
-    ]
-
-    df = df[columns]
+    for col in COLUMN_ORDER:
+        if col not in df.columns:
+            df[col] = ""
+    df = df[COLUMN_ORDER]
 
     # Prompt user for output file path
     default_output = results_dir / "benchmark_results_summary.xlsx"
