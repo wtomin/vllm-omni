@@ -62,6 +62,15 @@ COLUMN_ORDER = [
     "peak_memory_mb_max",
     "peak_memory_mb_mean",
     "peak_memory_mb_median",
+    "text_encoder.forward_mean",
+    "text_encoder.forward_p50",
+    "text_encoder.forward_p99",
+    "diffuse_mean",
+    "diffuse_p50",
+    "diffuse_p99",
+    "vae.decode_mean",
+    "vae.decode_p50",
+    "vae.decode_p99",
     "commit_sha",
     "build_id",
     "build_url",
@@ -101,9 +110,23 @@ def _resolution_from_params(params: dict) -> str:
     return "|".join(resolutions)
 
 
+def _get_stage_value(stage_dict: dict, suffix: str):
+    """Return the value whose key ends with *suffix*, or None if not found."""
+    if not isinstance(stage_dict, dict):
+        return None
+    for key, value in stage_dict.items():
+        if key.endswith(suffix):
+            return value
+    return None
+
+
 def _record_to_row(item: dict, filename: str) -> dict:
     params = item.get("benchmark_params", {}) if isinstance(item.get("benchmark_params"), dict) else {}
     result = item.get("result", {}) if isinstance(item.get("result"), dict) else {}
+
+    stage_mean = result.get("stage_durations_mean", {})
+    stage_p50 = result.get("stage_durations_p50", {})
+    stage_p99 = result.get("stage_durations_p99", {})
 
     framework = item.get("Framework") or item.get("backend") or _infer_framework_from_filename(filename)
     completed = item.get("completed")
@@ -140,6 +163,15 @@ def _record_to_row(item: dict, filename: str) -> dict:
         "peak_memory_mb_max": item.get("peak_memory_mb_max", result.get("peak_memory_mb_max")),
         "peak_memory_mb_mean": item.get("peak_memory_mb_mean", result.get("peak_memory_mb_mean")),
         "peak_memory_mb_median": item.get("peak_memory_mb_median", result.get("peak_memory_mb_median")),
+        "text_encoder.forward_mean": _get_stage_value(stage_mean, ".text_encoder.forward"),
+        "text_encoder.forward_p50": _get_stage_value(stage_p50, ".text_encoder.forward"),
+        "text_encoder.forward_p99": _get_stage_value(stage_p99, ".text_encoder.forward"),
+        "diffuse_mean": _get_stage_value(stage_mean, ".diffuse"),
+        "diffuse_p50": _get_stage_value(stage_p50, ".diffuse"),
+        "diffuse_p99": _get_stage_value(stage_p99, ".diffuse"),
+        "vae.decode_mean": _get_stage_value(stage_mean, ".vae.decode"),
+        "vae.decode_p50": _get_stage_value(stage_p50, ".vae.decode"),
+        "vae.decode_p99": _get_stage_value(stage_p99, ".vae.decode"),
         "commit_sha": item.get("commit_sha", ""),
         # Export-layer policy: force empty source/build provenance columns.
         "build_id": "",
