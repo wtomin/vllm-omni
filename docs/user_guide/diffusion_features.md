@@ -149,7 +149,7 @@ The following tables show which models support each feature:
 | **🔀Tensor Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | | | | | | | | |
 | **🔀HSDP** | ❓ | ❓ | ❓ | ❓ | ❓ | ❌ | | | | | | | |
 | **🔀Expert Parallel** | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | | | |
-| **💾CPU Offloading (Layerwise)** | ❓ | ❓ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | | |
+| **💾CPU Offloading (Layerwise)** | ❓ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | | | | | |
 | **💾CPU Offloading (Module-wise)** | ✅ | ✅ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | ❓ | | | | |
 | **💾VAE Patch Parallel** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ | | | |
 | **💾FP8 Quant** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❓ | ❓ | ✅ | ✅ | ✅ | | |
