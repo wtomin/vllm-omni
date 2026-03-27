@@ -132,7 +132,7 @@
                     {"width": 1536, "height": 1536, "num_inference_steps": 35, "weight": 0.15}
                 ],
                 "baseline": {
-                    "throughput_qps": 0.29,
+                    "throughput_qps": 0.20,
                     "latency_p99": 8.5,
                     "peak_memory_mb_max": 61000,
                     "peak_memory_mb_mean": 61000
@@ -215,7 +215,7 @@
                     {"width": 1536, "height": 1536, "num_inference_steps": 35, "weight": 0.15}
                 ],
                 "baseline": {
-                    "throughput_qps": 0.41,
+                    "throughput_qps": 0.35,
                     "latency_p99": 5.33,
                     "peak_memory_mb_max": 74000,
                     "peak_memory_mb_mean": 74000

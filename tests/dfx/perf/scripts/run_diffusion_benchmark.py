@@ -34,13 +34,14 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import psutil
 import pytest
 
 os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 os.environ["VLLM_TEST_CLEAN_GPU_MEMORY"] = "0"
+os.environ.setdefault("DIFFUSION_ATTENTION_BACKEND", "FLASH_ATTN")
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -57,6 +58,7 @@ BENCHMARK_SCRIPT = str(
 # Populated lazily after CONFIG_FILE_PATH is resolved.
 _SESSION_TIMESTAMP = datetime.now().strftime("%Y%m%d-%H%M%S")
 _RESULT_LOCK = threading.Lock()
+_BRANCHPOINT_COMMIT_SHA: str | None = None
 
 
 def _get_config_file_from_argv() -> str | None:
@@ -239,13 +241,13 @@ class DiffusionServer:
 
     def __init__(
         self,
-        model: str,
-        serve_args: list[str],
+        server_cfg: dict[str, Any],
         *,
         port: int | None = None,
     ) -> None:
-        self.model = model
-        self.serve_args = serve_args
+        self.server_cfg: dict[str, Any] = server_cfg
+        self.model = server_cfg["model"]
+        self.serve_args = server_cfg["serve_args"]
         self.host = "127.0.0.1"
         self.port = port if port is not None else _get_open_port()
         self.proc: subprocess.Popen | None = None
@@ -321,19 +323,17 @@ class SglangServer:
 
     def __init__(
         self,
-        model: str,
-        serve_args: list[str],
+        server_cfg: dict[str, Any],
         *,
         port: int | None = None,
-        env_overrides: dict[str, str] | None = None,
-        cache_dit_config: dict[str, Any] | None = None,
     ) -> None:
-        self.model = model
-        self.serve_args = serve_args
+        self.server_cfg: dict[str, Any] = server_cfg
+        self.model = server_cfg["model"]
+        self.serve_args = server_cfg["serve_args"]
         self.host = "127.0.0.1"
         self.port = port if port is not None else _get_open_port()
-        self.env_overrides = env_overrides or {}
-        self.cache_dit_config = cache_dit_config
+        self.env_overrides = server_cfg.get("env_overrides", {}) or {}
+        self.cache_dit_config = server_cfg.get("cache_dit_config")
         self.proc: subprocess.Popen | None = None
         self._tmp_yaml: str | None = None
         self.test_name: str = ""
@@ -414,8 +414,8 @@ def _build_serve_args(serve_args_dict: dict[str, Any], server_type: str = "vllm-
     """Convert a serve_args dict from test.json into a flat CLI argument list.
 
     Boolean handling differs by server type:
-    - vllm-omni uses store_true/store_false style: True → add flag only,
-      False → omit flag entirely.
+    - vllm-omni uses store_true/store_false style: True -> add flag only,
+      False -> omit flag entirely.
     - sglang accepts explicit boolean values: always emit ``--flag true/false``.
     """
     args: list[str] = []
@@ -433,6 +433,131 @@ def _build_serve_args(serve_args_dict: dict[str, Any], server_type: str = "vllm-
     return args
 
 
+def _get_branchpoint_commit_sha() -> str:
+    """Return the branch-point commit SHA against main.
+
+    Uses git command: `git merge-base HEAD origin/main`.
+    """
+    global _BRANCHPOINT_COMMIT_SHA
+    if _BRANCHPOINT_COMMIT_SHA is not None:
+        return _BRANCHPOINT_COMMIT_SHA
+
+    repo_root = Path(__file__).parent.parent.parent.parent
+    try:
+        sha = (
+            subprocess.check_output(
+                ["git", "merge-base", "HEAD", "origin/main"],
+                cwd=str(repo_root),
+                stderr=subprocess.STDOUT,
+                text=True,
+            )
+            .strip()
+            .splitlines()[0]
+        )
+        _BRANCHPOINT_COMMIT_SHA = sha
+    except Exception as e:
+        print(f"Warning: failed to get branch-point commit SHA: {e}")
+        _BRANCHPOINT_COMMIT_SHA = ""
+    return _BRANCHPOINT_COMMIT_SHA
+
+
+def _to_resolution_string(params: dict[str, Any]) -> str:
+    resolutions: list[str] = []
+    seen: set[str] = set()
+
+    width = params.get("width")
+    height = params.get("height")
+    if width and height:
+        res = f"{width}x{height}"
+        seen.add(res)
+        resolutions.append(res)
+
+    random_cfg = params.get("random-request-config")
+    if isinstance(random_cfg, list):
+        for item in random_cfg:
+            if not isinstance(item, dict):
+                continue
+            rw = item.get("width")
+            rh = item.get("height")
+            if rw and rh:
+                res = f"{rw}x{rh}"
+                if res not in seen:
+                    seen.add(res)
+                    resolutions.append(res)
+
+    if not resolutions:
+        print("Warning: No resolutions are found from benchmark config")
+
+    return "|".join(resolutions)
+
+
+def _to_parallelism_string(server_cfg: dict[str, Any], serve_args_dict: dict[str, Any]) -> str:
+    keys = [
+        "num-gpus",
+        "ulysses-degree",
+        "sp-degree",
+        "cfg-parallel-size",
+        "enable-cfg-parallel",
+        "vae-patch-parallel-size",
+        "vae-use-tiling",
+        "use-parallel-tiling",
+        "tensor-parallel-size",
+        "ring",
+        "ring-degree",
+    ]
+    parts: list[str] = []
+    for key in keys:
+        if key in serve_args_dict:
+            parts.append(f"{key}={serve_args_dict[key]}")
+    return ",".join(parts) if parts else "none"
+
+
+def _to_cache_string(server_cfg: dict[str, Any], serve_args_dict: dict[str, Any]) -> str:
+    if "cache-backend" in serve_args_dict:
+        return str(serve_args_dict["cache-backend"])
+    if server_cfg.get("cache_dit_config"):
+        return "cache_dit"
+    return ""
+
+
+def _to_offload_string(framework: str, serve_args_dict: dict[str, Any]) -> str:
+    offload_keys = [
+        "dit-cpu-offload",
+        "text-encoder-cpu-offload",
+        "image-encoder-cpu-offload",
+        "vae-cpu-offload",
+        "enable-layerwise-offload",
+    ]
+    selected: list[str] = []
+    has_any_key = False
+    for key in offload_keys:
+        if key in serve_args_dict:
+            has_any_key = True
+            val = bool(serve_args_dict[key])
+            selected.append(f"{key}={val}")
+
+    if framework == "vllm-omni":
+        return "disabled"
+    if has_any_key:
+        any_enabled = any("=True" in x for x in selected)
+        return f"enabled({';'.join(selected)})" if any_enabled else "disabled"
+    return ""
+
+
+def _to_compile_value(framework: str, serve_args_dict: dict[str, Any]) -> bool:
+    if framework == "vllm-omni":
+        return True
+    for key in ("enable-torch-compile",):
+        if key in serve_args_dict:
+            return bool(serve_args_dict[key])
+    return False
+
+
+def _to_quantization_value(serve_args_dict: dict[str, Any]) -> str:
+    quant = serve_args_dict.get("quantization")
+    return str(quant) if quant else "disabled"
+
+
 def _unique_server_params(configs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Return one server-config dict per unique test_name."""
     seen: set[str] = set()
@@ -443,15 +568,18 @@ def _unique_server_params(configs: list[dict[str, Any]]) -> list[dict[str, Any]]
             continue
         seen.add(test_name)
         server_type = cfg.get("server_type", "vllm-omni")
+        if server_type not in {"vllm-omni", "sglang"}:
+            raise ValueError(f"Unsupported server_type in config: {server_type}")
         result.append(
             {
                 "test_name": test_name,
                 "server_type": server_type,
                 "model": cfg["server_params"]["model"],
+                "serve_args_dict": cfg["server_params"].get("serve_args", {}),
                 "serve_args": _build_serve_args(cfg["server_params"].get("serve_args", {}), server_type),
                 "env_overrides": cfg["server_params"].get("env", {}),
                 "cache_dit_config": cfg["server_params"].get("cache_dit_config"),
-                "benchmark_backend": server_type,  # "vllm-omni" or "sglang"
+                "benchmark_backend": server_type,
             }
         )
     return result
@@ -468,16 +596,9 @@ def _test_param_mapping(configs: list[dict[str, Any]]) -> dict[str, list[dict]]:
 
 def _make_server(server_cfg: dict[str, Any]) -> DiffusionServer | SglangServer:
     """Factory: return the appropriate server instance for the given config."""
-    model = server_cfg["model"]
-    serve_args = server_cfg["serve_args"]
     if server_cfg["server_type"] == "sglang":
-        return SglangServer(
-            model=model,
-            serve_args=serve_args,
-            env_overrides=server_cfg.get("env_overrides", {}),
-            cache_dit_config=server_cfg.get("cache_dit_config"),
-        )
-    return DiffusionServer(model=model, serve_args=serve_args)
+        return SglangServer(server_cfg=server_cfg)
+    return DiffusionServer(server_cfg=server_cfg)
 
 
 # ---------------------------------------------------------------------------
@@ -542,6 +663,8 @@ def run_benchmark(
     params: dict[str, Any],
     test_name: str,
     backend: str = "vllm-omni",
+    server_cfg: dict[str, Any] | None = None,
+    source_file: str = "",
 ) -> dict[str, Any]:
     """Run diffusion_benchmark_serving.py as a subprocess and return parsed metrics.
 
@@ -634,6 +757,14 @@ def run_benchmark(
     finally:
         tmp_result_file.unlink(missing_ok=True)
 
+    server_cfg = server_cfg or {}
+    serve_args_dict = server_cfg.get("serve_args_dict", {})
+    if not isinstance(serve_args_dict, dict):
+        serve_args_dict = {}
+
+    completed = metrics.get("completed_requests", metrics.get("completed", 0))
+    failed = metrics.get("failed_requests", metrics.get("failed", 0))
+
     record: dict[str, Any] = {
         "test_name": test_name,
         "backend": backend,
@@ -641,6 +772,36 @@ def run_benchmark(
         "benchmark_params": params,
         "result": metrics,
         "log_file": str(log_file),
+        "Model": model,
+        "Framework": backend,
+        "Hardware": "",
+        "Deployment": "",
+        "Task": params.get("task", "t2i"),
+        "Dataset": params.get("dataset", "random"),
+        "resolution": _to_resolution_string(params),
+        "Parallelism": _to_parallelism_string(server_cfg, serve_args_dict),
+        "max_concurrency": params.get("max-concurrency", ""),
+        "Cache": _to_cache_string(server_cfg, serve_args_dict),
+        "Quantization": _to_quantization_value(serve_args_dict),
+        "offload": _to_offload_string(backend, serve_args_dict),
+        "compile": _to_compile_value(backend, serve_args_dict),
+        "Attn_backend": os.environ.get("DIFFUSION_ATTENTION_BACKEND", ""),
+        "num_inference_steps": params.get("num-inference-steps", ""),
+        "completed": completed,
+        "failed": failed,
+        "throughput_qps": metrics.get("throughput_qps"),
+        "latency_mean": metrics.get("latency_mean"),
+        "latency_median": metrics.get("latency_median"),
+        "latency_p99": metrics.get("latency_p99"),
+        "latency_p95": metrics.get("latency_p95"),
+        "latency_p50": metrics.get("latency_p50"),
+        "peak_memory_mb_max": metrics.get("peak_memory_mb_max"),
+        "peak_memory_mb_mean": metrics.get("peak_memory_mb_mean"),
+        "peak_memory_mb_median": metrics.get("peak_memory_mb_median"),
+        "commit_sha": _get_branchpoint_commit_sha(),
+        "build_id": os.environ.get("BUILDKITE_BUILD_ID", ""),
+        "build_url": os.environ.get("BUILDKITE_BUILD_URL", ""),
+        "source_file": source_file,
     }
     _append_to_aggregated_file(record)
     print(f"\n  Result appended to: {AGGREGATED_RESULT_FILE}")
@@ -703,6 +864,8 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
         params=params,
         test_name=test_name,
         backend=backend,
+        server_cfg=getattr(diffusion_server, "server_cfg", {}),
+        source_file=cast(str, CONFIG_FILE_PATH),
     )
 
     print(f"\n{'=' * 60}")

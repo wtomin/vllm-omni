@@ -343,9 +343,10 @@ async def async_request_image_sglang(
     output = RequestFuncOutput()
     output.start_time = time.perf_counter()
 
-    # Check if we need to use multipart (for image edits with input images)
+    # Use multipart/form-data for image edits with input images.
     if input.image_paths and len(input.image_paths) > 0:
-        # Use multipart/form-data for image edits
+        # SGLang image edit uses /v1/images/edits for multipart image payloads.
+        edit_api_url = input.api_url.replace("/v1/images/generations", "/v1/images/edits")
         data = aiohttp.FormData()
         data.add_field("model", input.model)
         data.add_field("prompt", input.prompt)
@@ -354,16 +355,17 @@ async def async_request_image_sglang(
         if input.width and input.height:
             data.add_field("size", f"{input.width}x{input.height}")
 
-        # Merge extra parameters
         for key, value in input.extra_body.items():
             data.add_field(key, str(value))
 
-        # Add image file(s)
-        for idx, img_path in enumerate(input.image_paths):
+        opened_files = []
+        for img_path in input.image_paths:
             if os.path.exists(img_path):
+                image_file = open(img_path, "rb")
+                opened_files.append(image_file)
                 data.add_field(
                     "image",
-                    open(img_path, "rb"),
+                    image_file,
                     filename=os.path.basename(img_path),
                     content_type="application/octet-stream",
                 )
@@ -375,7 +377,7 @@ async def async_request_image_sglang(
                 return output
 
         try:
-            async with session.post(input.api_url, data=data) as response:
+            async with session.post(edit_api_url, data=data) as response:
                 if response.status == 200:
                     resp_json = await response.json()
                     output.response_body = resp_json
@@ -388,9 +390,12 @@ async def async_request_image_sglang(
         except Exception as e:
             output.error = str(e)
             output.success = False
+        finally:
+            for f in opened_files:
+                f.close()
     else:
-        # Use JSON for text-to-image generation
-        payload = {
+        # Use JSON for text-to-image generation.
+        payload: dict[str, Any] = {
             "model": input.model,
             "prompt": input.prompt,
             "n": 1,
@@ -399,7 +404,6 @@ async def async_request_image_sglang(
 
         if input.width and input.height:
             payload["size"] = f"{input.width}x{input.height}"
-
         if input.num_inference_steps:
             payload["num_inference_steps"] = input.num_inference_steps
 
@@ -422,7 +426,6 @@ async def async_request_image_sglang(
 
     output.latency = time.perf_counter() - output.start_time
 
-    # Check SLO if defined
     if input.slo_ms is not None and output.success:
         output.slo_achieved = (output.latency * 1000.0) <= input.slo_ms
 
@@ -439,31 +442,22 @@ async def async_request_video_sglang(
     output = RequestFuncOutput()
     output.start_time = time.perf_counter()
 
-    # 1. Submit Job
     job_id = None
-    # Check if we need to upload images (Multipart) or just send JSON
     if input.image_paths and len(input.image_paths) > 0:
-        # Use multipart/form-data
         data = aiohttp.FormData()
         data.add_field("model", input.model)
         data.add_field("prompt", input.prompt)
 
         if input.width and input.height:
             data.add_field("size", f"{input.width}x{input.height}")
-
-        # Add extra body fields to form data if possible, or assume simple key-values
-        # Note: Nested dicts in extra_body might need JSON serialization if API expects it stringified
         if input.extra_body:
             data.add_field("extra_body", json.dumps(input.extra_body))
-
-        # Explicitly add fps/num_frames if they are not in extra_body (bench_serving logic overrides)
         if input.num_frames:
             data.add_field("num_frames", str(input.num_frames))
         if input.fps:
             data.add_field("fps", str(input.fps))
 
-        # Add image file
-        # Currently only support single image upload as 'input_reference' per API spec
+        # SGLang video API currently accepts a single input reference.
         img_path = input.image_paths[0]
         if os.path.exists(img_path):
             data.add_field(
@@ -496,9 +490,7 @@ async def async_request_video_sglang(
             if pbar:
                 pbar.update(1)
             return output
-
     else:
-        # Use JSON
         payload: dict[str, Any] = {
             "model": input.model,
             "prompt": input.prompt,
@@ -539,12 +531,7 @@ async def async_request_video_sglang(
             pbar.update(1)
         return output
 
-    # 2. Poll for completion
-    # Assuming the API returns a 'status' field.
-    # We construct the check URL. Assuming api_url is like .../v1/videos
-    # The check url should be .../v1/videos/{id}
     check_url = f"{input.api_url}/{job_id}"
-
     while True:
         try:
             async with session.get(check_url) as response:
@@ -557,13 +544,11 @@ async def async_request_video_sglang(
                         if "peak_memory_mb" in status_data:
                             output.peak_memory_mb = status_data["peak_memory_mb"]
                         break
-                    elif status == "failed":
+                    if status == "failed":
                         output.success = False
                         output.error = f"Job failed: {status_data.get('error')}"
                         break
-                    else:
-                        # queued or processing
-                        await asyncio.sleep(1.0)
+                    await asyncio.sleep(1.0)
                 else:
                     output.success = False
                     output.error = f"Poll failed HTTP {response.status}: {await response.text()}"
@@ -575,7 +560,6 @@ async def async_request_video_sglang(
 
     output.latency = time.perf_counter() - output.start_time
 
-    # Check SLO if defined
     if input.slo_ms is not None and output.success:
         output.slo_achieved = (output.latency * 1000.0) <= input.slo_ms
 
