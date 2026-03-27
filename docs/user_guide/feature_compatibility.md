@@ -5,6 +5,7 @@ This guide explains the compatibility matrix of different diffusion features in 
 ## Overview
 
 vLLM-Omni supports combining:
+
 - **Cache methods** (TeaCache, Cache-DiT) with **Parallelism methods** (Ulysses-SP, Ring-Attention, CFG-Parallel, Tensor Parallelism)
 - **Multiple parallelism methods** together (e.g., Ulysses-SP + Ring-Attention, CFG-Parallel + Sequence Parallelism)
 - **LoRA adapters** with most acceleration features
