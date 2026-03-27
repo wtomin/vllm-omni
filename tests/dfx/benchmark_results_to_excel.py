@@ -137,12 +137,12 @@ def _record_to_row(item: dict, filename: str) -> dict:
         failed = result.get("failed_requests", result.get("failed"))
 
     row = {
-        "Model": item.get("Model", ""),
+        "Model": item.get("Model") or result.get("model", ""),
         "Framework": framework,
         "Hardware": item.get("Hardware", ""),
         "Deployment": item.get("Deployment", ""),
-        "Task": item.get("Task", params.get("task", "")),
-        "Dataset": item.get("Dataset", params.get("dataset", "")),
+        "Task": item.get("Task") or result.get("task") or params.get("task", ""),
+        "Dataset": item.get("Dataset") or result.get("dataset") or params.get("dataset", ""),
         "resolution": item.get("resolution", _resolution_from_params(params)),
         "Parallelism": item.get("Parallelism", ""),
         "max_concurrency": item.get("max_concurrency", params.get("max-concurrency", "")),
