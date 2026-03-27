@@ -57,7 +57,6 @@ nav:
       - Overview: user_guide/diffusion_features.md
       - Feature Compatibility: user_guide/feature_compatibility.md
       - Cache Acceleration:
-        - Overview: user_guide/diffusion/cache_acceleration/overview.md
         - TeaCache: user_guide/diffusion/cache_acceleration/teacache.md
         - Cache-DiT: user_guide/diffusion/cache_acceleration/cache_dit.md
       - Quantization:
