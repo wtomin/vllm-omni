@@ -169,8 +169,7 @@ vllm serve Qwen/Qwen-Image --omni --port 8091 \
 
 - **CPU Offloading — VAE stays on GPU**: Both offloading strategies keep the VAE on GPU at all times. For high-resolution generation, VAE decode can still cause OOM. Mitigate by combining with `vae_use_tiling=True` or VAE Patch Parallelism.
 
-- **VAE Patch Parallelism — Allowlist Required**: VAE Patch Parallelism is only enabled for models that have been explicitly validated and added to the registry allowlist (`_VAE_PATCH_PARALLEL_ALLOWLIST`). Unsupported models will silently ignore `vae_patch_parallel_size`, and use sequential vae tiling instead.
-
+- **VAE Patch Parallelism — DistributedVaeExecutor Required**: VAE Patch Parallelism is only enabled for models that have `DistributedVaeExecutor`. Unsupported models will silently ignore `vae_patch_parallel_size`, and use sequential vae tiling instead.
 
 ### Configuration Constraints
 
