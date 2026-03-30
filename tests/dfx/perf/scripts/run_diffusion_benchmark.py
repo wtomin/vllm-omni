@@ -246,7 +246,6 @@ class DiffusionServer:
         self.port = port if port is not None else _get_open_port()
         self.proc: subprocess.Popen | None = None
         self.test_name: str = ""
-        self.server_params: dict[str, Any] | None = None
 
     def _start_server(self) -> None:
         env = os.environ.copy()
@@ -391,27 +390,16 @@ def _to_cache_string(server_cfg: dict[str, Any], serve_args_dict: dict[str, Any]
 
 
 def _to_offload_string(framework: str, serve_args_dict: dict[str, Any]) -> str:
-    offload_keys = [
-        "dit-cpu-offload",
-        "text-encoder-cpu-offload",
-        "image-encoder-cpu-offload",
-        "vae-cpu-offload",
-        "enable-layerwise-offload",
-    ]
     selected: list[str] = []
-    has_any_key = False
-    for key in offload_keys:
-        if key in serve_args_dict:
-            has_any_key = True
-            val = bool(serve_args_dict[key])
-            selected.append(f"{key}={val}")
-
     if framework == "vllm-omni":
-        return "disabled"
-    if has_any_key:
-        any_enabled = any("=True" in x for x in selected)
-        return f"enabled({';'.join(selected)})" if any_enabled else "disabled"
-    return ""
+        offload_keys = [
+            "enable-cpu-offload",
+            "enable-layerwise-offload",
+        ]
+        for key in offload_keys:
+            if key in serve_args_dict:
+                selected.append(key)
+    return f"enabled({';'.join(selected)})" if selected else "disabled"
 
 
 def _to_compile_value(framework: str, serve_args_dict: dict[str, Any]) -> bool:
@@ -493,7 +481,6 @@ def diffusion_server(request):
         print(f"\nStarting {server_type} server for test: {test_name}")
         with _make_server(server_cfg) as server:
             server.test_name = test_name
-            server.server_params = server_cfg["server_params"]
             print(f"{server_type} server started successfully")
             yield server
             print(f"{server_type} server stopping…")
