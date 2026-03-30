@@ -3,10 +3,9 @@
 # Compatibility matrix row 3: ulysses as baseline, test combinations with cache acceleration features.
 # Requires ≥2 GPUs (ulysses gpu_multiplier=2).
 #
-# ❌ Known conflict (auto-skipped): ulysses + teacache (SP and TeaCache are not compatible, probably due to bugs in the implementation)
-#
 # Addon combinations to test:
-#   cache_dit  — Ulysses + Cache-DiT
+#   teacache   — Ulysses + TeaCache        ✅ verified compatible
+#   cache_dit  — Ulysses + Cache-DiT       ✅ verified compatible
 #
 # Usage:
 #   bash compatibility/scripts/03_ulysses.sh
@@ -23,12 +22,12 @@ OUTPUT_DIR="${OUTPUT_DIR:-./compat_results}"
 CHARTS="${CHARTS:-1}"
 
 echo "======================================================================"
-echo "Row 3 | baseline: ulysses | addons: cache_dit"
+echo "Row 3 | baseline: ulysses | addons: teacache cache_dit"
 echo "======================================================================"
 
 python "${SCRIPT_DIR}/../run_compat_test.py" \
     --baseline-feature ulysses \
-    --addons cache_dit \
+    --addons teacache cache_dit \
     --model "${MODEL}" \
     --num-prompts "${NUM_PROMPTS}" \
     --steps "${STEPS}" \

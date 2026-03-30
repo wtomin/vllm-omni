@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # ── Row 4: Ring-Attn ─────────────────────────────────────────────────────────
-# Compatibility matrix row 4: ring as baseline, test combinations with cache acceleration features.
-# Requires ≥2 GPUs (ring gpu_multiplier=2).
-#
-# ✅ Already verified: ring + ulysses (marked ✅ in the matrix; not re-run here)
-#
-# ❌ Known conflict (auto-skipped): ring + teacache (SP and TeaCache are not compatible, probably due to bugs in the implementation)
+# Compatibility matrix row 4: ring as baseline, test combinations with cache and sequence parallel features.
+# Requires ≥2 GPUs (ring gpu_multiplier=2); ring+ulysses requires 4 GPUs.
 #
 # Addon combinations to test:
-#   cache_dit  — Ring + Cache-DiT
+#   teacache   — Ring + TeaCache            ✅ verified compatible
+#   cache_dit  — Ring + Cache-DiT           ✅ verified compatible
+#   ulysses    — Ring + Ulysses-SP          ✅ verified compatible (requires 4 GPUs)
+#
+# Note: ring+ulysses combination requires 4 GPUs; the framework auto-marks SKIP (GPU) if insufficient.
 #
 # Usage:
 #   bash compatibility/scripts/04_ring.sh
@@ -24,12 +24,12 @@ OUTPUT_DIR="${OUTPUT_DIR:-./compat_results}"
 CHARTS="${CHARTS:-1}"
 
 echo "======================================================================"
-echo "Row 4 | baseline: ring | addons: cache_dit"
+echo "Row 4 | baseline: ring | addons: teacache cache_dit ulysses"
 echo "======================================================================"
 
 python "${SCRIPT_DIR}/../run_compat_test.py" \
     --baseline-feature ring \
-    --addons cache_dit \
+    --addons teacache cache_dit ulysses \
     --model "${MODEL}" \
     --num-prompts "${NUM_PROMPTS}" \
     --steps "${STEPS}" \

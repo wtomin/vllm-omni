@@ -4,10 +4,10 @@
 # Single-GPU only (SINGLE_CARD_ONLY); all multi-GPU features are marked ❌ and auto-skipped by the framework.
 #
 # Addon combinations to test:
-#   teacache   — Layerwise Offload + TeaCache
-#   cache_dit  — Layerwise Offload + Cache-DiT
+#   teacache   — Layerwise Offload + TeaCache   ❓ compatibility not yet verified
+#   cache_dit  — Layerwise Offload + Cache-DiT  ✅ verified compatible
 #
-# ❌ Known conflicts (auto-skipped): layerwise_offload + ulysses/ring/cfg_parallel/tp/hsdp
+# ❌ Known conflicts (auto-skipped): layerwise_offload + ulysses/ring/cfg_parallel/tp/hsdp/expert_parallel
 #
 # Usage:
 #   bash compatibility/scripts/08_layerwise_offload.sh
