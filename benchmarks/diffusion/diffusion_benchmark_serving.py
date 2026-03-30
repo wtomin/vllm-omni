@@ -1016,7 +1016,7 @@ if __name__ == "__main__":
         "--backend",
         type=str,
         default="vllm-omni",
-        choices=["vllm-omni", "openai", "v1/videos"],
+        choices=["vllm-omni", "openai", "v1/videos", "sglang"],
         help="Backend to target the benchmark to.",
     )
     parser.add_argument(

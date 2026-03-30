@@ -373,7 +373,13 @@ steps:
         EXIT2=$$?
         pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py --config-file tests/dfx/perf/tests/test_qwen_image_edit_2509_vllm_omni.json
         EXIT3=$$?
-        exit $$((EXIT1 | EXIT2 | EXIT3))
+        pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py --config-file tests/dfx/perf/tests/test_qwen_image_sglang_diffusion.json
+        EXIT4=$$?
+        pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py --config-file tests/dfx/perf/tests/test_qwen_image_edit_sglang_diffusion.json
+        EXIT5=$$?
+        pytest -s -v tests/dfx/perf/scripts/run_diffusion_benchmark.py --config-file tests/dfx/perf/tests/test_qwen_image_edit_2509_sglang_diffusion.json
+        EXIT6=$$?
+        exit $$((EXIT1 | EXIT2 | EXIT3 | EXIT4 | EXIT5 | EXIT6))
       - buildkite-agent artifact upload "tests/dfx/perf/results/benchmark_results_*.json"
       - buildkite-agent artifact upload "tests/dfx/perf/results/logs/*.log"
     agents:

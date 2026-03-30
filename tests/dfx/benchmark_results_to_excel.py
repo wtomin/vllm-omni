@@ -9,6 +9,7 @@ Example:
     Scanning directory: \\path\to\results
 
     Found X JSON file(s):
+      - benchmark_results_test_sglang_diffusion_xxx.json
       - benchmark_results_test_vllm_omni_xxx.json
 
     Please enter the output Excel file path (press Enter to use default):
@@ -69,6 +70,8 @@ BASE_COLUMN_ORDER = [
 
 
 def _infer_framework_from_filename(filename: str) -> str:
+    if "sglang" in filename:
+        return "sglang"
     if "vllm_omni" in filename:
         return "vllm-omni"
     return ""
