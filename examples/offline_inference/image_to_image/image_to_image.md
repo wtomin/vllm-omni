@@ -175,8 +175,7 @@ python image_edit.py \
   --seed 0 \
   --guidance-scale 5.0 \
   --guidance-scale-2 2.0 \
-  --output outputs/image_edit.png \
-  --num-outputs-per-prompt 2
+  --output outputs/image_edit.png
 ```
 
 ### Layered Editing (Qwen-Image-Layered)
