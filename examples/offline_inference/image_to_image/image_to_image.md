@@ -19,19 +19,20 @@ This folder provides an entrypoint for image editing with diffusion models using
 
 ### Supported Models
 
-| Model | Image Shape | Peak VRAM (GiB) * | Model Weights (GiB) |
+| Model | Input Image Shape | Peak VRAM (GiB) * | Model Weights (GiB) |
 | ----- | ----------- | ----------------- | ------------------- |
-| `Qwen/Qwen-Image-Edit` | 1024 × 1024 | 60.0 | 53.7 |
-| `Qwen/Qwen-Image-Edit-2509` | 1024 × 1024 | 60.0 | 53.7 |
-| `Qwen/Qwen-Image-Edit-2511` | 1024 × 1024 | 60.0 | 53.7 |
-| `Qwen/Qwen-Image-Layered` | 1024 × 1024 | 60.0 | 53.7 |
-| `meituan-longcat/LongCat-Image-Edit` | 1024 × 1024 | 71.2 | 27.3 |
-| `OmniGen2/OmniGen2` | 1024 × 1024 | 20.1 | 14.7 |
-| `black-forest-labs/FLUX.1-Kontext-dev` | 1024 × 1024 | 77.6 | 31.4 |
+| `Qwen/Qwen-Image-Edit` | 514 x 556 | 58.9 | 53.7 |
+| `Qwen/Qwen-Image-Edit-2509` | 514 x 556  | 58.6 | 53.7 |
+| `Qwen/Qwen-Image-Edit-2511` | 514 x 556 | 58.5 | 53.7 |
+| `Qwen/Qwen-Image-Layered` | 514 x 556 | 61.5 | 53.7 |
+| `meituan-longcat/LongCat-Image-Edit` | 514 x 556 | 32.5 | 27.3 |
+| `OmniGen2/OmniGen2` | 514 x 556 | 19.4 | 14.7 |
+| `black-forest-labs/FLUX.1-Kontext-dev` | 514 x 556 | 77.6 | 31.4 |
 
 !!! info
     *Peak VRAM: based on basic single-card usage, batch size = 1, without any acceleration/optimization features. Some models may require CPU offloading on a single 80 GiB GPU.
     Model Weights: the VRAM consumption of model weights (BF16) is printed as `Model loading took xxx GiB and xxx seconds` in the logging.
+    Input Image Shape: Here we use `qwen-bear.png` (514 × 556) as the input image for all examples below. The output image shape varies by model. For example, `Qwen/Qwen-Image-Edit` normalizes to ~1M pixels while preserving the aspect ratio, so a 514 × 556 input produces a 992 × 1056 output; `OmniGen2/OmniGen2` never upscales the input and only applies VAE alignment, so the same input produces a 512 × 544 output.
 
 Default model: `Qwen/Qwen-Image-Edit`
 
