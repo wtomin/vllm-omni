@@ -211,54 +211,7 @@ python image_edit.py \
 
 ## Advanced Features
 
-### CFG Parallel
-
-Set `--cfg-parallel-size 2` to enable CFG Parallel for faster inference on 2-GPU setups. This is especially effective for image editing workflows that rely on classifier-free guidance (`--cfg-scale > 1`).
-
-```bash
-python image_edit.py \
-  --image qwen-bear.png \
-  --prompt "Let this mascot dance under the moon" \
-  --cfg-parallel-size 2 \
-  --num-inference-steps 50 \
-  --cfg-scale 4.0 \
-  --output output_cfg_parallel.png
-```
-
-See more examples in the [diffusion parallelism user guide](../../../docs/user_guide/diffusion/parallelism_acceleration.md#cfg-parallel).
-
-### Cache Acceleration
-
-Use `--cache-backend` to speed up inference with minimal quality trade-off.
-
-**Cache-DiT** (recommended for high quality):
-
-```bash
-python image_edit.py \
-  --model Qwen/Qwen-Image-Edit-2511 \
-  --image qwen-bear.png \
-  --prompt "Add a white art board written with colorful text 'vLLM-Omni' on grassland" \
-  --output output_cache_dit.png \
-  --num-inference-steps 50 \
-  --cfg-scale 4.0 \
-  --cache-backend cache_dit \
-  --cache-dit-max-continuous-cached-steps 3 \
-  --cache-dit-residual-diff-threshold 0.24 \
-  --cache-dit-enable-taylorseer
-```
-
-**TeaCache** (quick setup):
-
-```bash
-python image_edit.py \
-  --image qwen-bear.png \
-  --prompt "Let this mascot dance under the moon" \
-  --cache-backend tea_cache \
-  --tea-cache-rel-l1-thresh 0.25 \
-  --output output_tea_cache.png
-```
-
-See [Cache-DiT guide](../../../docs/user_guide/diffusion/cache_acceleration/cache_dit.md) and [TeaCache guide](../../../docs/user_guide/diffusion/cache_acceleration/teacache.md) for tuning details.
+See more advanced features in [Features Support Table](../../../docs/user_guide/diffusion_features.md#supported-models).
 
 ## FAQ
 
