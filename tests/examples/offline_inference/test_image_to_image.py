@@ -83,3 +83,42 @@ def test_image_to_image(snippet: ReadmeSnippet, example_runner: ExampleRunner):
     result = example_runner.run(snippet, output_subfolder=Path(EXAMPLE_OUTPUT_SUBFOLDER))
     for asset in result.assets:
         assert_image_valid(asset)
+
+
+def test_layered_001(input_image: Path):
+    """Manual test for Qwen-Image-Layered since it's skipped by the snippet runner.
+    Ensures that layered output generation works correctly and returns 4 layer files.
+    """
+    import sys
+    from tests.examples.conftest import run_cmd
+
+    case_dir = OUTPUT_DIR / EXAMPLE_OUTPUT_SUBFOLDER / "layered-001"
+    case_dir.mkdir(parents=True, exist_ok=True)
+    out_prefix = case_dir / "layered_output"
+
+    run_cmd(
+        [
+            sys.executable,
+            str(I2I_SCRIPT),
+            "--model",
+            "Qwen/Qwen-Image-Layered",
+            "--image",
+            str(input_image),
+            "--prompt",
+            "a rabbit",
+            "--output",
+            str(out_prefix),
+            "--num-inference-steps",
+            "2",
+            "--layers",
+            "4",
+            "--color-format",
+            "RGBA",
+            "--seed",
+            "0",
+        ]
+    )
+
+    for i in range(4):
+        layer_path = case_dir / f"{out_prefix.name}_{i}.png"
+        assert_image_valid(layer_path)
