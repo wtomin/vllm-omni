@@ -90,6 +90,7 @@ def test_layered_001(input_image: Path):
     Ensures that layered output generation works correctly and returns 4 layer files.
     """
     import sys
+
     from tests.examples.conftest import run_cmd
 
     case_dir = OUTPUT_DIR / EXAMPLE_OUTPUT_SUBFOLDER / "layered-001"
