@@ -19,6 +19,15 @@ Please refer to [README.md](https://github.com/vllm-project/vllm-omni/tree/main/
 
 ## Gradio Demo
 
+!!! note "Gradio is an optional dependency"
+    The Gradio demo requires the `[demo]` extras. Install them first:
+
+    ```bash
+    pip install 'vllm-omni[demo]'
+    ```
+
+    Or, if installing from source: `pip install -e '.[demo]'`
+
 Two interactive Gradio demos are available, both supporting all 3 task types:
 
 | Demo     | File                     | Transport    | Streaming Quality                                  |
@@ -46,23 +55,30 @@ Then open http://localhost:7860 in your browser.
 
 ### Launch the Server
 
-The default stage config is located at `vllm_omni/model_executor/stage_configs/qwen3_tts.yaml`. For other platforms (e.g., NPU), refer to `vllm_omni/platforms/npu/stage_configs/qwen3_tts.yaml`.
-
 ```bash
 # CustomVoice model (predefined speakers)
 vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
+    --stage-configs-path vllm_omni/model_executor/stage_configs/qwen3_tts.yaml \
     --omni \
-    --port 8091
+    --port 8091 \
+    --trust-remote-code \
+    --enforce-eager
 
 # VoiceDesign model
 vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign \
+    --stage-configs-path vllm_omni/model_executor/stage_configs/qwen3_tts.yaml \
     --omni \
-    --port 8091
+    --port 8091 \
+    --trust-remote-code \
+    --enforce-eager
 
 # Base model (voice cloning)
 vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-Base \
+    --stage-configs-path vllm_omni/model_executor/stage_configs/qwen3_tts.yaml \
     --omni \
-    --port 8091
+    --port 8091 \
+    --trust-remote-code \
+    --enforce-eager
 ```
 
 If you have custom stage configs file, launch the server with command below
@@ -70,7 +86,9 @@ If you have custom stage configs file, launch the server with command below
 vllm serve Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
     --stage-configs-path /path/to/stage_configs_file \
     --omni \
-    --port 8091
+    --port 8091 \
+    --trust-remote-code \
+    --enforce-eager
 ```
 
 Alternatively, use the convenience script:
@@ -93,16 +111,14 @@ cd examples/online_serving/qwen3_tts
 ```bash
 # CustomVoice: Use predefined speaker
 python openai_speech_client.py \
-    --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
     --text "你好，我是通义千问" \
-    --voice vivian \
+    --speaker vivian \
     --language Chinese
 
 # CustomVoice with style instruction
 python openai_speech_client.py \
-    --model Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice \
     --text "今天天气真好" \
-    --voice ryan \
+    --speaker ryan \
     --instructions "用开心的语气说"
 
 # VoiceDesign: Describe the voice style
@@ -127,7 +143,7 @@ The Python client supports the following command-line arguments:
 - `--model` (or `-m`): Model name/path (default: `Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice`)
 - `--task-type` (or `-t`): TTS task type. Options: `CustomVoice`, `VoiceDesign`, `Base`
 - `--text`: Text to synthesize (required)
-- `--voice`: Speaker/voice name (default: `vivian`). Options: `vivian`, `ryan`, `aiden`, etc.
+- `--speaker`: Speaker name (default: `vivian`). Options: `vivian`, `ryan`, `aiden`, etc.
 - `--language`: Language. Options: `Auto`, `Chinese`, `English`, `Japanese`, `Korean`, `German`, `French`, `Russian`, `Portuguese`, `Spanish`, `Italian`
 - `--instructions`: Voice style/emotion instructions
 - `--ref-audio`: Reference audio file path or URL for voice cloning (Base task). Local paths are automatically base64-encoded by the client before sending to the server.
@@ -302,6 +318,12 @@ This endpoint follows the [OpenAI Audio Speech API](https://platform.openai.com/
 
 Returns binary audio data with appropriate `Content-Type` header (e.g., `audio/wav`).
 
+### Voice and language (summary)
+
+- **Speaker**: Use the `voice` request field to select the speaker (e.g., `vivian`, `ryan`, `aiden`). List available speakers with `GET /v1/audio/voices`.
+- **Language**: Use the `language` field for the codec language tag (`Auto`, `Chinese`, `English`, etc.). Default is `Auto` for automatic detection.
+- **CustomVoice**: Requires a valid `voice` from the model’s speaker set. **VoiceDesign**: Use `instructions` to describe the voice. **Base**: Use `ref_audio` and `ref_text` for voice cloning.
+
 ## Parameters
 
 ### OpenAI Standard Parameters
@@ -407,13 +429,13 @@ Server -> Client:
 
 ## Example materials
 
-??? abstract "batch_speech_client.py"
-    ``````py
-    --8<-- "examples/online_serving/qwen3_tts/batch_speech_client.py"
-    ``````
 ??? abstract "gradio_demo.py"
     ``````py
     --8<-- "examples/online_serving/qwen3_tts/gradio_demo.py"
+    ``````
+??? abstract "gradio_fastrtc_demo.py"
+    ``````py
+    --8<-- "examples/online_serving/qwen3_tts/gradio_fastrtc_demo.py"
     ``````
 ??? abstract "openai_speech_client.py"
     ``````py
@@ -426,10 +448,6 @@ Server -> Client:
 ??? abstract "run_server.sh"
     ``````sh
     --8<-- "examples/online_serving/qwen3_tts/run_server.sh"
-    ``````
-??? abstract "speaker_embedding_interpolation.py"
-    ``````py
-    --8<-- "examples/online_serving/qwen3_tts/speaker_embedding_interpolation.py"
     ``````
 ??? abstract "streaming_speech_client.py"
     ``````py
