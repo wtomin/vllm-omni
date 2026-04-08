@@ -124,6 +124,12 @@ python image_edit.py \
 | `--layers` | int | `4` | Number of layers to decompose the output image into |
 | `--color-format` | str | `"RGB"` | Color format for input/output images. Set to `"RGBA"` for layered output |
 
+**Z-Image Image-to-Image-specific arguments**
+
+| Argument | Type | Default | Description |
+| -------- | ---- | ------- | ----------- |
+| `--strength`  | float | 0.6     |  - Denoising start timestep for I2I. Range: [0.0, 1.0]. Lower preserves more of original image. |
+
 **Cache-DiT-specific arguments** (used when `--cache-backend cache_dit`):
 
 | Argument | Type | Default | Description |
@@ -206,6 +212,22 @@ python image_edit.py \
   --output longcat_edit.png \
   --num-inference-steps 50 \
   --cfg-scale 4.0
+```
+
+### Z-Image Image-to-Image Editing
+
+Use `--strength` to control how much the output follows the input image (`0.0` keeps more source details; `1.0` allows larger changes):
+
+```bash
+python image_edit.py \
+  --model Tongyi-MAI/Z-Image-Turbo \
+  --image qwen-bear.png \
+  --prompt "Add colorful fireworks bursting in the background behind the bear" \
+  --guidance-scale 3.0 \
+  --strength 0.6 \
+  --num-inference-steps 50 \
+  --seed 42 \
+  --output output.png
 ```
 
 ## Advanced Features
