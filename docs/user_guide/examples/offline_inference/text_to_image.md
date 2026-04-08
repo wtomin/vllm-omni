@@ -87,9 +87,6 @@ python text_to_image.py \
 | `--vae-use-slicing` | flag | off | Enable VAE slicing for memory optimization |
 | `--vae-use-tiling` | flag | off | Enable VAE tiling for memory optimization |
 | `--cfg-parallel-size` | int | `1` | Set to `2` to enable CFG Parallel |
-| `--ulysses-degree` | int | `1` | Ulysses sequence parallel degree for multi-GPU inference |
-| `--ring-degree` | int | `1` | Ring sequence parallel degree for hybrid Ulysses + Ring inference |
-| `--ulysses-mode` | str | `"strict"` | Ulysses SP mode: `"strict"` or `"advanced_uaa"` |
 | `--enable-cpu-offload` | flag | off | Enable CPU offloading for diffusion models |
 | `--lora-path` | str | — | Path to PEFT LoRA adapter folder |
 | `--lora-scale` | float | `1.0` | Scale factor for LoRA weights |
@@ -125,19 +122,6 @@ python text_to_image.py \
 ```
 
 `Tongyi-MAI/Z-Image-Turbo` is a distilled version of Z-Image. Distilled diffusion models usually require less number of inference steps (4~9), and Classifier-Free Guidance (CFG) is usually NOT applied. Similar distilled models are `black-forest-labs/FLUX.2-klein-4B` and `black-forest-labs/FLUX.2-klein-9B`.
-
-Advanced UAA example (requires 2 GPUs):
-
-```bash
-python text_to_image.py \
-  --model Tongyi-MAI/Z-Image-Turbo \
-  --prompt "a cup of coffee on the table" \
-  --ulysses-degree 2 \
-  --ulysses-mode advanced_uaa \
-  --height 1024 \
-  --width 1024 \
-  --output outputs/coffee_hybrid.png
-```
 
 ### NextStep Models
 
@@ -271,6 +255,15 @@ lora_adapter/
 ```
 
 ## Web UI Demo
+
+!!! note "Gradio is an optional dependency"
+    The Gradio demo requires the `[demo]` extras. Install them first:
+
+    ```bash
+    pip install 'vllm-omni[demo]'
+    ```
+
+    Or, if installing from source: `pip install -e '.[demo]'`
 
 Launch the Gradio demo:
 
