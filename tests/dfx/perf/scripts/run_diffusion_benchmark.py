@@ -704,6 +704,7 @@ def _build_run_params(
     params: dict[str, Any],
     *,
     num_prompts: int,
+    sweep_index: int | None = None,
     request_rate: Any | None = None,
     max_concurrency: Any | None = None,
 ) -> dict[str, Any]:
@@ -715,6 +716,16 @@ def _build_run_params(
         run_params["request-rate"] = request_rate
     if max_concurrency is not None:
         run_params["max-concurrency"] = max_concurrency
+    if "baseline" in params:
+        run_params["baseline"] = {
+            metric: _resolve_baseline_value(
+                baseline_raw,
+                sweep_index=sweep_index,
+                max_concurrency=max_concurrency,
+                request_rate=request_rate,
+            )
+            for metric, baseline_raw in params["baseline"].items()
+        }
     return run_params
 
 
@@ -744,6 +755,7 @@ def _iter_sweep_runs(params: dict[str, Any]) -> list[dict[str, Any]]:
                     params,
                     request_rate=request_rate,
                     num_prompts=num_prompts,
+                    sweep_index=i,
                 ),
                 "num_prompts": num_prompts,
                 "sweep_index": i,
@@ -759,6 +771,7 @@ def _iter_sweep_runs(params: dict[str, Any]) -> list[dict[str, Any]]:
                     params,
                     max_concurrency=max_concurrency,
                     num_prompts=num_prompts,
+                    sweep_index=i,
                     request_rate="inf",
                 ),
                 "num_prompts": num_prompts,
@@ -772,7 +785,10 @@ def _iter_sweep_runs(params: dict[str, Any]) -> list[dict[str, Any]]:
         default_num_prompts = num_prompt_list[0]
         sweep_runs.append(
             {
-                "params": _build_run_params(params, num_prompts=default_num_prompts),
+                "params": _build_run_params(
+                    params,
+                    num_prompts=default_num_prompts,
+                ),
                 "num_prompts": default_num_prompts,
                 "sweep_index": None,
                 "request_rate": None,
