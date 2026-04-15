@@ -812,6 +812,7 @@ def _iter_sweep_runs(params: dict[str, Any]) -> list[dict[str, Any]]:
                     params,
                     max_concurrency=max_concurrency,
                     num_prompts=num_prompts,
+                    sweep_index=i,
                     request_rate="inf",
                     sweep_index=i,
                 ),
@@ -826,7 +827,10 @@ def _iter_sweep_runs(params: dict[str, Any]) -> list[dict[str, Any]]:
         default_num_prompts = num_prompt_list[0]
         sweep_runs.append(
             {
-                "params": _build_run_params(params, num_prompts=default_num_prompts),
+                "params": _build_run_params(
+                    params,
+                    num_prompts=default_num_prompts,
+                ),
                 "num_prompts": default_num_prompts,
                 "sweep_index": None,
                 "request_rate": None,
