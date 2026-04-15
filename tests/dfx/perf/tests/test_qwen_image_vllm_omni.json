@@ -17,8 +17,8 @@
                 "width": 512,
                 "height": 512,
                 "num-inference-steps": 20,
-                "num-prompts": 10,
-                "max-concurrency": 1,
+                "num-prompts": [10, 20, 40],
+                "max-concurrency": [1, 2, 4],
                 "enable-negative-prompt": true,
                 "baseline": {
                     "throughput_qps": 0.35,
