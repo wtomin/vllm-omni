@@ -814,7 +814,6 @@ def _iter_sweep_runs(params: dict[str, Any]) -> list[dict[str, Any]]:
                     num_prompts=num_prompts,
                     sweep_index=i,
                     request_rate="inf",
-                    sweep_index=i,
                 ),
                 "num_prompts": num_prompts,
                 "sweep_index": i,
