@@ -31,6 +31,7 @@ This folder provides an entrypoint for image editing with diffusion models using
 | `meituan-longcat/LongCat-Image-Edit` | 514 x 556 | Single | Single-image | 32.5 | 27.3 |
 | `OmniGen2/OmniGen2` | 514 x 556 | Single | Single-image | 19.4 | 14.7 |
 | `black-forest-labs/FLUX.1-Kontext-dev` | 514 x 556 | Single | Single-image | 77.6 | 31.4 |
+| `Tongyi-MAI/Z-Image-Turbo` | 514 x 556 | Single | Single-image | 23.9 | 19.2 |
 
 !!! info
     *Peak VRAM: based on basic single-card usage, batch size = 1, without any acceleration/optimization features. Some models may require CPU offloading on a single 80 GiB GPU.
