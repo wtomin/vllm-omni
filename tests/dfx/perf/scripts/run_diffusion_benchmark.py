@@ -835,7 +835,8 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params):
             params=sweep_run["params"],
             test_name=test_name,
             backend=backend,
-            server_params=diffusion_server.server_params,
+            server_cfg=getattr(diffusion_server, "server_cfg", {}),
+            source_file=str(CONFIG_FILE_PATH),
         )
 
         print(f"\n{'=' * 60}")
