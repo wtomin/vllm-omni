@@ -17,8 +17,8 @@
                 "width": 512,
                 "height": 512,
                 "num-inference-steps": 20,
-                "num-prompts": [10, 20, 40],
-                "max-concurrency": [1, 2, 4],
+                "num-prompts": 10,
+                "max-concurrency": 1,
                 "enable-negative-prompt": true,
                 "baseline": {
                     "throughput_qps": 0.35,
@@ -63,13 +63,13 @@
                 "width": 512,
                 "height": 512,
                 "num-inference-steps": 20,
-                "num-prompts": 10,
-                "max-concurrency": 1,
+                "num-prompts": [10, 20, 40],
+                "max-concurrency": [1, 2, 4],
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.35,
-                    "latency_mean": 3,
-                    "peak_memory_mb_mean": 56000
+                    "throughput_qps": [0.30, 0.60, 0.90],
+                    "latency_mean": [3.50, 7.00, 14.00],
+                    "peak_memory_mb_mean": [67000, 67000, 67000]
                 }
             },
             {
