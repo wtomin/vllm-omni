@@ -79,13 +79,13 @@
                 "width": 1536,
                 "height": 1536,
                 "num-inference-steps": 35,
-                "num-prompts": 10,
-                "max-concurrency": 1,
+                "num-prompts": [10, 20, 40],
+                "max-concurrency": [1, 2, 4],
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": 0.03,
-                    "latency_mean": 26,
-                    "peak_memory_mb_mean": 65000
+                    "throughput_qps": [0.037, 0.074, 0.111],
+                    "latency_mean": [27.0, 54.0, 108.0],
+                    "peak_memory_mb_mean": [74000, 74000, 74000]
                 }
             }
         ]
