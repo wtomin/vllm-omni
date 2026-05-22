@@ -30,7 +30,6 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
-from unittest import result
 
 import psutil
 import pytest
@@ -869,7 +868,7 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
 
     for sweep_run in sweep_runs:
         endpoint = _resolve_benchmark_endpoint(server_cfg, sweep_run["params"])
-        endpoint = run_benchmark(
+        result = run_benchmark(
             host=diffusion_server.host,
             port=diffusion_server.port,
             model=diffusion_server.model,
