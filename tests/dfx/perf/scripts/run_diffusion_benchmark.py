@@ -719,6 +719,7 @@ def assert_result(
         else:
             assert current <= threshold, f"{metric}: {current:.4f} > baseline {threshold}"
 
+
 def _default_benchmark_endpoint_for_task(task: str) -> str:
     """Return the default client-side benchmark endpoint for a diffusion task."""
     if task in {"t2v", "i2v", "ti2v"}:
@@ -734,6 +735,7 @@ def _resolve_benchmark_endpoint(server_cfg: dict[str, Any], params: dict[str, An
     if configured:
         return normalize_endpoint(cast(str, configured))
     return _default_benchmark_endpoint_for_task(cast(str, params.get("task", "t2i")))
+
 
 def _to_list(value: Any) -> list[Any]:
     if value is None:
@@ -866,20 +868,20 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
     sweep_runs = _iter_sweep_runs(params)
 
     for sweep_run in sweep_runs:
-        backend = _resolve_benchmark_endpoint(server_cfg, sweep_run["params"])
-        endpoint  = run_benchmark(
+        endpoint = _resolve_benchmark_endpoint(server_cfg, sweep_run["params"])
+        endpoint = run_benchmark(
             host=diffusion_server.host,
             port=diffusion_server.port,
             model=diffusion_server.model,
             params=sweep_run["params"],
             test_name=test_name,
-            endpoint =endpoint ,
+            endpoint=endpoint,
             server_cfg=server_cfg,
             source_file=cast(str, CONFIG_FILE_PATH),
         )
 
         print(f"\n{'=' * 60}")
-        print(f"Results for {test_name} (server={diffusion_server.server_type}, backend={backend}):")
+        print(f"Results for {test_name} (server={diffusion_server.server_type}, endpoint={endpoint}):")
         for key in (
             "throughput_qps",
             "latency_mean",
@@ -905,5 +907,5 @@ def test_diffusion_performance_benchmark(diffusion_server, benchmark_params, req
             sweep_index=sweep_run["sweep_index"],
             max_concurrency=sweep_run["max_concurrency"],
             request_rate=sweep_run["request_rate"],
-            assert_baseline=assert_baseline
+            assert_baseline=assert_baseline,
         )
