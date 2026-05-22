@@ -228,6 +228,15 @@ class VideoGenerationRequest(BaseModel):
         description="True CFG scale (model-specific parameter, may be ignored if not supported)",
     )
     seed: int | None = Field(default=None, ge=_INT64_MIN, le=_INT64_MAX, description="Random seed for reproducibility")
+    pipefusion_warmup_steps: int | None = Field(
+        default=None,
+        ge=1,
+        description="Per-request PipeFusion warmup steps before async patch mode.",
+    )
+    pipefusion_split_dim: Literal["height", "temporal"] | None = Field(
+        default=None,
+        description="Per-request PipeFusion latent split dimension.",
+    )
     generate_sound: bool = Field(
         default=False,
         description="Request model-generated audio for video models that support sound generation.",
