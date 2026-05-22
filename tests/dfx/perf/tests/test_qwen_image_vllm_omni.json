@@ -202,16 +202,16 @@
                 "width": 512,
                 "height": 512,
                 "num-inference-steps": 20,
-                "num-prompts": [20, 40, 80, 120, 160],
-                "max-concurrency": [1, 2, 4, 6, 8],
+                "num-prompts": [20, 40, 80,  160],
+                "max-concurrency": [1, 2, 4,  8],
                 "warmup-requests": 8,
                 "warmup-concurrency": 8,
                 "warmup-num-inference-steps": 20,
                 "enable-negative-prompt": true,
                 "baseline": {
-                    "throughput_qps": [0.30, 0.50, 0.60, 0.70, 0.75],
-                    "latency_mean": [3.50, 4.00, 7.00, 9.00, 12.00],
-                    "peak_memory_mb_mean": [67000, 67000, 67000, 67000, 67000]
+                    "throughput_qps": [0.30, 0.50, 0.60,  0.75],
+                    "latency_mean": [3.50, 4.00, 7.00,  12.00],
+                    "peak_memory_mb_mean": [67000, 67000, 67000, 6 67000]
                 }
             }
         ]
