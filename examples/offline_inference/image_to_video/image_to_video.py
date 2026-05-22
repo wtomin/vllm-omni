@@ -240,6 +240,12 @@ def parse_args() -> argparse.Namespace:
         help="Enable diffusion pipeline profiler to display stage durations.",
     )
     parser.add_argument(
+        "--profiler-config",
+        type=parse_profiler_config,
+        default=None,
+        help='JSON profiler config for torch/cuda profiling, e.g. \'{"profiler":"torch","torch_profiler_dir":"./perf"}\'.',
+    )
+    parser.add_argument(
         "--quantization",
         type=str,
         default=None,
@@ -309,10 +315,22 @@ def parse_args() -> argparse.Namespace:
         help="Number of pipeline parallel stages.",
     )
     parser.add_argument(
-        "--profiler-config",
-        type=parse_profiler_config,
-        default=None,
-        help='JSON profiler config for torch/cuda profiling, e.g. \'{"profiler":"torch","torch_profiler_dir":"./perf"}\'.',
+        "--enable-pipefusion",
+        action="store_true",
+        help="Enable PipeFusion (patch-wise async pipeline parallel). Requires --pipeline-parallel-size > 1.",
+    )
+    parser.add_argument(
+        "--pipefusion-warmup-steps",
+        type=int,
+        default=1,
+        help="Number of warmup (sync) steps before switching to async PipeFusion patch mode (default: 1).",
+    )
+    parser.add_argument(
+        "--pipefusion-split-dim",
+        type=str,
+        default="height",
+        choices=["height", "temporal"],
+        help="Dimension along which to split latents into patches for PipeFusion (default: height).",
     )
     parser.add_argument(
         "--lora-path",
@@ -506,6 +524,7 @@ def main():
         hsdp_shard_size=args.hsdp_shard_size,
         hsdp_replicate_size=args.hsdp_replicate_size,
         pipeline_parallel_size=args.pipeline_parallel_size,
+        enable_pipefusion=args.enable_pipefusion,
     )
     omni_kwargs = dict(
         model=args.model,
@@ -610,6 +629,8 @@ def main():
         num_inference_steps=num_inference_steps,
         num_frames=num_frames,
         frame_rate=frame_rate,
+        pipefusion_warmup_steps=args.pipefusion_warmup_steps,
+        pipefusion_split_dim=args.pipefusion_split_dim,
         extra_args=sampling_extra_args,
     )
     if flow_shift is not None:
