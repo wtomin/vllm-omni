@@ -211,7 +211,7 @@
                 "baseline": {
                     "throughput_qps": [0.30, 0.50, 0.60,  0.75],
                     "latency_mean": [3.50, 4.00, 7.00,  12.00],
-                    "peak_memory_mb_mean": [67000, 67000, 67000, 6 67000]
+                    "peak_memory_mb_mean": [67000, 67000, 67000, 67000]
                 }
             }
         ]
