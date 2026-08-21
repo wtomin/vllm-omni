@@ -22,6 +22,7 @@ from vllm.v1.worker.gpu_worker import AsyncIntermediateTensors
 import vllm_omni.diffusion.distributed.pipeline_parallel as pp_module
 from tests.helpers.mark import hardware_marks
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
+from vllm_omni.diffusion.distributed.group_coordinator import GroupCoordinator, TensorMetadata
 from vllm_omni.diffusion.distributed.parallel_state import (
     destroy_distributed_env,
     get_classifier_free_guidance_rank,
@@ -75,11 +76,16 @@ def _cleanup_distributed() -> None:
 class FakeWork:
     """Drop-in for torch.distributed.Work that records whether wait() was called."""
 
-    def __init__(self):
+    def __init__(self, completed: bool = False):
         self.waited = False
+        self.completed = completed
 
     def wait(self):
         self.waited = True
+        self.completed = True
+
+    def is_completed(self):
+        return self.completed
 
 
 class SimpleScheduler:
@@ -236,6 +242,16 @@ class TestAsyncLatents:
         _ = al.dtype  # second resolve
         assert not h.waited, "handle.wait() was called a second time"
 
+    def test_is_ready_is_non_blocking(self):
+        t = torch.randn(2, 4)
+        h = FakeWork(completed=False)
+        al = self._make(t, handles=[h])
+
+        assert al.is_ready() is False
+        assert h.waited is False
+        h.completed = True
+        assert al.is_ready() is True
+
 
 # ---------------------------------------------------------------------------
 # 2.  _sync_pp_send / diffuse wrapper – unit tests (no distributed env required)
@@ -273,6 +289,20 @@ class TestSyncPPSend:
         pipeline._pp_send_work = [FakeWork()]
         pipeline._sync_pp_send()
         assert pipeline._pp_send_work == []
+
+    def test_can_skip_latent_send_sync(self):
+        pipeline = self._make_pipeline()
+        forward_work = FakeWork()
+        latent_work = FakeWork()
+        pipeline._pp_send_work = [forward_work]
+        pipeline._pp_latent_send_work = [latent_work]
+
+        pipeline._sync_pp_send(include_latent=False)
+
+        assert forward_work.waited
+        assert not latent_work.waited
+        assert pipeline._pp_send_work == []
+        assert pipeline._pp_latent_send_work == [latent_work]
 
 
 class TestDiffuseWrapper:
@@ -517,6 +547,38 @@ def isend_irecv_worker(
     _cleanup_distributed()
 
 
+def known_layout_isend_irecv_worker(
+    local_rank: int,
+    world_size: int,
+    master_port: str,
+    device_kind: DeviceKind,
+    shapes: list[tuple[int, ...]],
+    result_queue,
+):
+    device = init_dist(local_rank, world_size, master_port, device_kind)
+    initialize_model_parallel(pipeline_parallel_size=world_size, backend=_mp_backend(device_kind))
+    pp_group = get_pp_group()
+
+    try:
+        for idx, shape in enumerate(shapes):
+            expected = pp_group.tensor_dict_metadata({"t": torch.empty(shape, dtype=torch.float32, device=device)})
+            if pp_group.is_first_rank:
+                _seed_device(77 + idx, device)
+                tensor = torch.randn(*shape, dtype=torch.float32, device=device)
+                handles = pp_group.isend_tensor_dict_with_layout({"t": tensor}, expected)
+                for h in handles:
+                    h.wait()
+                result_queue.put(("sent", idx, tensor.cpu()))
+            else:
+                received = AsyncIntermediateTensors(*pp_group.irecv_tensor_dict_with_layout(expected))
+                result_queue.put(("received", idx, received["t"].cpu()))
+
+        if torch.distributed.is_initialized():
+            torch.distributed.barrier()
+    finally:
+        _cleanup_distributed()
+
+
 def _run_isend_irecv(pp_size: int, device_kind: DeviceKind, master_port: str) -> None:
     mp_context = torch.multiprocessing.get_context("spawn")
     manager = mp_context.Manager()
@@ -532,6 +594,34 @@ def _run_isend_irecv(pp_size: int, device_kind: DeviceKind, master_port: str) ->
     )
 
 
+def _run_known_layout_isend_irecv(
+    pp_size: int,
+    device_kind: DeviceKind,
+    master_port: str,
+    shapes: list[tuple[int, ...]],
+) -> None:
+    mp_context = torch.multiprocessing.get_context("spawn")
+    manager = mp_context.Manager()
+    q = manager.Queue()
+    torch.multiprocessing.spawn(
+        known_layout_isend_irecv_worker,
+        args=(pp_size, master_port, device_kind, shapes, q),
+        nprocs=pp_size,
+    )
+    results = {}
+    for _ in range(len(shapes) * 2):
+        label, idx, tensor = q.get()
+        results[(label, idx)] = tensor
+    for idx in range(len(shapes)):
+        torch.testing.assert_close(
+            results[("received", idx)],
+            results[("sent", idx)],
+            rtol=0,
+            atol=0,
+            msg=f"known-layout isend/irecv transferred tensor {idx} incorrectly",
+        )
+
+
 @pytest.mark.core_model
 @pytest.mark.diffusion
 @pytest.mark.cpu
@@ -539,6 +629,37 @@ def _run_isend_irecv(pp_size: int, device_kind: DeviceKind, master_port: str) ->
 def test_isend_irecv_tensor_dict(pp_size: int):
     """isend_tensor_dict / irecv_tensor_dict transfer a tensor dict without loss."""
     _run_isend_irecv(pp_size, device_kind="cpu", master_port=_find_free_port())
+
+
+@pytest.mark.core_model
+@pytest.mark.diffusion
+@pytest.mark.cpu
+@pytest.mark.parametrize("pp_size", [2])
+def test_known_layout_isend_irecv_tensor_dict_mixed_shapes(pp_size: int):
+    """Known-layout tensor dict transfer supports different shapes across requests."""
+    _run_known_layout_isend_irecv(
+        pp_size,
+        device_kind="cpu",
+        master_port=_find_free_port(),
+        shapes=[(3, 5), (2, 7)],
+    )
+
+
+@pytest.mark.core_model
+@pytest.mark.diffusion
+@pytest.mark.cpu
+def test_known_layout_isend_rejects_layout_mismatch(monkeypatch):
+    coordinator = object.__new__(GroupCoordinator)
+    coordinator.world_size = 2
+    coordinator.group_next_rank = 1
+    monkeypatch.setattr(torch.distributed, "is_initialized", lambda: True)
+
+    expected = [("t", TensorMetadata("cpu", torch.float32, torch.Size([3, 5])))]
+    with pytest.raises(ValueError, match="layout mismatch"):
+        coordinator.isend_tensor_dict_with_layout(
+            {"t": torch.empty(2, 7, dtype=torch.float32)},
+            expected,
+        )
 
 
 @pytest.mark.full_model

@@ -314,6 +314,7 @@ class Wan22Pipeline(
 ):
     supports_request_batch = True
     supports_step_execution: ClassVar[bool] = True
+    supports_pp_latent_static_layout: ClassVar[bool] = True
     _dit_modules: ClassVar[list[str]] = ["transformer", "transformer_2"]
     _encoder_modules: ClassVar[list[str]] = ["text_encoder"]
     _vae_modules: ClassVar[list[str]] = ["vae"]

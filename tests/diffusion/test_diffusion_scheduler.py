@@ -782,6 +782,27 @@ class TestRequestScheduler:
         assert finished == {req_id}
         assert scheduler.get_request_state(req_id).status == DiffusionRequestStatus.FINISHED_COMPLETED
 
+    def test_blocked_step_output_keeps_request_running_without_advancing(self) -> None:
+        scheduler = StepScheduler()
+        scheduler.initialize(SimpleNamespace())
+        req_id = scheduler.add_request(_make_step_request("blocked", num_inference_steps=4))
+
+        sched_output = scheduler.schedule()
+        blocked = RunnerOutput(
+            request_id=req_id,
+            step_index=0,
+            finished=False,
+            blocked=True,
+        )
+
+        finished = scheduler.update_from_output(sched_output, blocked)
+
+        assert finished == set()
+        state = scheduler.get_request_state(req_id)
+        assert state.status == DiffusionRequestStatus.RUNNING
+        assert state.req.sampling_params.step_index == 0
+        assert scheduler.has_requests() is True
+
     def test_fifo_single_request_scheduling(self) -> None:
         req_id_a = self.scheduler.add_request(_make_request("a"))
         req_id_b = self.scheduler.add_request(_make_request("b"))

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+import os
 from functools import wraps
 from typing import Any
 
@@ -15,6 +16,25 @@ from vllm_omni.diffusion.distributed.parallel_state import (
     get_pp_group,
     is_pipeline_first_stage,
 )
+
+_PP_LATENT_OVERLAP_ENV = "VLLM_OMNI_ENABLE_PP_LATENT_OVERLAP"
+_PP_LATENT_STATIC_LAYOUT_ENV = "VLLM_OMNI_ENABLE_PP_LATENT_STATIC_LAYOUT"
+
+
+def pp_latent_overlap_enabled() -> bool:
+    return os.environ.get(_PP_LATENT_OVERLAP_ENV, "").lower() in {"1", "true", "yes", "on"}
+
+
+def pp_latent_static_layout_enabled() -> bool:
+    return os.environ.get(_PP_LATENT_STATIC_LAYOUT_ENV, "").lower() in {"1", "true", "yes", "on"}
+
+
+def _work_is_completed(work: torch.distributed.Work) -> bool:
+    for attr_name in ("is_completed", "isCompleted"):
+        checker = getattr(work, attr_name, None)
+        if callable(checker):
+            return bool(checker())
+    return False
 
 
 class AsyncLatents:
@@ -50,6 +70,11 @@ class AsyncLatents:
             fn()
         self._tensor = self._tensor_dict["latents"]
         return self._tensor
+
+    def is_ready(self) -> bool:
+        if self._tensor is not None:
+            return True
+        return all(_work_is_completed(handle) for handle in self._handles)
 
     # Attribute access (e.g. .shape, .to(), .dtype) delegates to the resolved tensor.
     def __getattr__(self, name: str):
@@ -90,6 +115,8 @@ class PipelineParallelMixin:
     executed — one for the positive pass and one for the negative pass — so that each
     PP stage operates on the correct encoder_hidden_states.
     """
+
+    supports_pp_latent_static_layout = False
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -163,7 +190,23 @@ class PipelineParallelMixin:
     def _pp_send_work(self, work: list[torch.distributed.Work]) -> None:
         self._pp_send_work_list = work
 
-    def _sync_pp_send(self) -> None:
+    @property
+    def _pp_latent_send_work(self) -> list[torch.distributed.Work]:
+        if not hasattr(self, "_pp_latent_send_work_list"):
+            self._pp_latent_send_work_list: list[torch.distributed.Work] = []
+        return self._pp_latent_send_work_list
+
+    @_pp_latent_send_work.setter
+    def _pp_latent_send_work(self, work: list[torch.distributed.Work]) -> None:
+        self._pp_latent_send_work_list = work
+
+    def _prune_pp_latent_send_work(self) -> None:
+        if self._pp_latent_send_work:
+            self._pp_latent_send_work = [
+                handle for handle in self._pp_latent_send_work if not _work_is_completed(handle)
+            ]
+
+    def _sync_pp_send(self, *, include_latent: bool = True) -> None:
         """
         Wait on all pending non-blocking PP sends.
 
@@ -175,6 +218,35 @@ class PipelineParallelMixin:
             for handle in self._pp_send_work:
                 handle.wait()
             self._pp_send_work = []
+        if include_latent and self._pp_latent_send_work:
+            for handle in self._pp_latent_send_work:
+                handle.wait()
+            self._pp_latent_send_work = []
+        elif self._pp_latent_send_work:
+            self._prune_pp_latent_send_work()
+
+    def _pp_latent_static_layout_metadata(
+        self,
+        pp_group: Any,
+        latents: torch.Tensor | tuple[torch.Tensor, ...],
+    ) -> list[tuple[str, Any]] | None:
+        if not pp_latent_static_layout_enabled():
+            return None
+        if not pp_latent_overlap_enabled():
+            return None
+        if not getattr(self, "supports_pp_latent_static_layout", False):
+            return None
+        if isinstance(latents, AsyncLatents):
+            latents = torch.as_tensor(latents)
+        if not isinstance(latents, torch.Tensor):
+            return None
+        return pp_group.tensor_dict_metadata(self._pp_latent_static_layout_payload(latents))
+
+    def _pp_latent_static_layout_payload(
+        self,
+        latents: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        return {"latents": latents}
 
     def predict_noise_maybe_with_cfg(
         self,
@@ -205,7 +277,7 @@ class PipelineParallelMixin:
                 do_true_cfg, true_cfg_scale, positive_kwargs, negative_kwargs, cfg_normalize, output_slice
             )
 
-        self._sync_pp_send()
+        self._sync_pp_send(include_latent=not pp_latent_overlap_enabled())
 
         pp_group = get_pp_group()
 
@@ -281,11 +353,41 @@ class PipelineParallelMixin:
             )
 
         pp_group = get_pp_group()
+        expected_latent_metadata = self._pp_latent_static_layout_metadata(pp_group, latents)
         if pp_group.is_last_rank:
             latents = super().scheduler_step_maybe_with_cfg(
                 noise_pred, t, latents, do_true_cfg, per_request_scheduler, generator
             )
-            self._pp_send_work = pp_group.isend_tensor_dict({"latents": latents}, dst=0)
+            if pp_latent_overlap_enabled():
+                self._prune_pp_latent_send_work()
+                if expected_latent_metadata is None:
+                    self._pp_latent_send_work.extend(pp_group.isend_tensor_dict({"latents": latents}, dst=0))
+                else:
+                    assert isinstance(latents, torch.Tensor)
+                    self._pp_latent_send_work.extend(
+                        pp_group.isend_tensor_dict_with_layout(
+                            self._pp_latent_static_layout_payload(latents),
+                            expected_latent_metadata,
+                            dst=0,
+                        )
+                    )
+            else:
+                if expected_latent_metadata is None:
+                    self._pp_send_work = pp_group.isend_tensor_dict({"latents": latents}, dst=0)
+                else:
+                    assert isinstance(latents, torch.Tensor)
+                    self._pp_send_work = pp_group.isend_tensor_dict_with_layout(
+                        self._pp_latent_static_layout_payload(latents),
+                        expected_latent_metadata,
+                        dst=0,
+                    )
         elif pp_group.is_first_rank:
-            latents = AsyncLatents(*pp_group.irecv_tensor_dict(src=pp_group.world_size - 1))
+            if expected_latent_metadata is None:
+                tensor_dict, handles, postproc = pp_group.irecv_tensor_dict(src=pp_group.world_size - 1)
+            else:
+                tensor_dict, handles, postproc = pp_group.irecv_tensor_dict_with_layout(
+                    expected_latent_metadata,
+                    src=pp_group.world_size - 1,
+                )
+            latents = AsyncLatents(tensor_dict, handles, postproc)
         return latents

@@ -11,8 +11,10 @@ import torch
 import vllm_omni.diffusion.worker.diffusion_model_runner as model_runner_module
 from tests.helpers.mark import hardware_test
 from vllm_omni.diffusion.data import DiffusionOutput
+from vllm_omni.diffusion.distributed.pipeline_parallel import AsyncLatents
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch, split_diffusion_output_by_request
+from vllm_omni.diffusion.worker.utils import StepRequestState
 
 pytestmark = [pytest.mark.diffusion]
 
@@ -129,6 +131,14 @@ class _CompileTrackingModel:
     def compile(self, *args, **kwargs):
         self.compile_calls.append((args, kwargs))
         return self
+
+
+class _NeverReadyWork:
+    def wait(self):
+        raise AssertionError("pending AsyncLatents should not be resolved")
+
+    def is_completed(self):
+        return False
 
 
 def _make_request():
@@ -391,6 +401,50 @@ def test_execute_stepwise_streaming_decodes_final_only_pipeline(monkeypatch):
     assert output.finished is True
     assert output.result is not None
     assert torch.equal(output.result.output, torch.ones(1, 1))
+
+
+@pytest.mark.core_model
+@pytest.mark.cpu
+def test_execute_stepwise_skips_pending_pp_latents_and_runs_new_request(monkeypatch):
+    runner = _make_runner(cache_backend=None, cache_backend_name=None)
+    runner.pipeline = _FinalOnlyStepPipeline()
+    runner.od_config.step_execution = True
+
+    pending = StepRequestState(
+        request_id="pending",
+        sampling=SimpleNamespace(num_inference_steps=2),
+        prompt="old prompt",
+    )
+    pending.latents = AsyncLatents({"latents": torch.zeros(1, 1)}, [_NeverReadyWork()], [])
+    pending.timesteps = torch.tensor([1.0, 0.0])
+    pending.step_index = 1
+    runner.state_cache[pending.request_id] = pending
+
+    new_req = _make_request()
+    new_req.request_id = "new"
+    monkeypatch.setenv("VLLM_OMNI_ENABLE_PP_LATENT_OVERLAP", "1")
+    monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "is_available", lambda: True)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_reserved", lambda: 0)
+    monkeypatch.setattr(model_runner_module.current_omni_platform, "max_memory_allocated", lambda: 0)
+    scheduler_output = SimpleNamespace(
+        finished_req_ids=set(),
+        scheduled_new_reqs=[SimpleNamespace(request_id="new", req=new_req, diffusion_kv_metadata=None)],
+        scheduled_cached_reqs=SimpleNamespace(request_ids=["pending"]),
+    )
+
+    output = DiffusionModelRunner.execute_stepwise(runner, scheduler_output)
+
+    blocked = output.get_request_output("pending")
+    assert blocked is not None
+    assert blocked.blocked is True
+    assert blocked.step_index == 1
+    new_output = output.get_request_output("new")
+    assert new_output is not None
+    assert new_output.finished is True
+    assert new_output.result is not None
+    assert torch.equal(new_output.result.output, torch.ones(1, 1))
+    assert runner.state_cache["pending"].latents is pending.latents
 
 
 @pytest.mark.core_model

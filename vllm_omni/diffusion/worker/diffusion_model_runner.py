@@ -34,6 +34,10 @@ from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
 from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
+from vllm_omni.diffusion.distributed.pipeline_parallel import (
+    AsyncLatents,
+    pp_latent_overlap_enabled,
+)
 from vllm_omni.diffusion.forward_context import set_forward_context
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
 from vllm_omni.diffusion.models.interface import (
@@ -73,6 +77,10 @@ if TYPE_CHECKING:
     from vllm_omni.inputs.data import OmniInteractionPrompt
 
 logger = init_logger(__name__)
+
+
+def _is_pending_async_latents(value: object) -> bool:
+    return isinstance(value, AsyncLatents) and not value.is_ready()
 
 
 def _normalize_pipeline_outputs(
@@ -151,6 +159,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
 
         # Cache for per-request stepwise state.
         self.state_cache: dict[str, StepRequestState] = {}
+        self.completed_request_ids: set[str] = set()
 
         # Initialize KV cache manager for connector management.
         self.kv_transfer_manager = OmniKVTransferManager.from_od_config(od_config)
@@ -767,6 +776,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         """Step-before update: cleanup finished requests and get/create one running state."""
         for request_id in scheduler_output.finished_req_ids:
             self.state_cache.pop(request_id, None)
+            self.completed_request_ids.add(request_id)
 
         resolved: list[StepRequestState] = []
         new_request_ids: list[str] = []
@@ -775,6 +785,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             for sched_new_req in scheduler_output.scheduled_new_reqs:
                 request_id = sched_new_req.request_id
                 new_request_ids.append(request_id)
+                self.completed_request_ids.discard(request_id)
                 if request_id in self.state_cache:
                     raise ValueError(f"Received duplicate new-request payload for cached request {request_id}.")
                 new_state = StepRequestState(
@@ -798,6 +809,9 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             for request_id in scheduler_output.scheduled_cached_reqs.request_ids:
                 state = self.state_cache.get(request_id)
                 if state is None:
+                    if request_id in self.completed_request_ids:
+                        logger.warning("Skipping stale cached state for completed request %s.", request_id)
+                        continue
                     raise ValueError(f"Missing cached state for request {request_id}.")
                 resolved.append(state)
         except Exception:
@@ -806,6 +820,35 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             raise
 
         return resolved, new_request_ids
+
+    def _partition_step_ready_states(
+        self,
+        states: list[StepRequestState],
+        new_request_ids: list[str],
+    ) -> tuple[list[StepRequestState], list[StepRequestState]]:
+        if not pp_latent_overlap_enabled():
+            return states, []
+        new_request_id_set = set(new_request_ids)
+        ready_states: list[StepRequestState] = []
+        blocked_states: list[StepRequestState] = []
+        for state in states:
+            if state.request_id not in new_request_id_set and _is_pending_async_latents(state.latents):
+                blocked_states.append(state)
+            else:
+                ready_states.append(state)
+        return ready_states, blocked_states
+
+    @staticmethod
+    def _make_blocked_outputs(states: list[StepRequestState]) -> list[RunnerOutput]:
+        return [
+            RunnerOutput(
+                request_id=state.request_id,
+                step_index=state.step_index,
+                finished=False,
+                blocked=True,
+            )
+            for state in states
+        ]
 
     def _prepare_batch_inputs(self, states: list[StepRequestState], new_request_ids: list[str]) -> InputBatch:
         # process new reqs
@@ -824,6 +867,9 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             states,
             cached_batch=getattr(self, "input_batch", None),
         )
+        batch_stage_durations = consume_pipeline_stage_durations(self.pipeline)
+        for state in states:
+            merge_stage_durations(state, batch_stage_durations)
         self.input_batch = input_batch
         return input_batch
 
@@ -834,6 +880,14 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         interrupted: bool = False,
     ) -> None:
         """Step-after update: clear cached state for completed request."""
+        if pp_latent_overlap_enabled() and any(_is_pending_async_latents(state.latents) for state in states):
+            self.input_batch = None
+            for state in states:
+                if interrupted or state.request_denoise_completed:
+                    self.state_cache.pop(state.request_id, None)
+                    self.completed_request_ids.add(state.request_id)
+            return
+
         gathered_latents = torch.cat([state.latents for state in states], dim=0)
         if (
             input_batch.latents.size() == gathered_latents.size()
@@ -850,6 +904,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         for state in states:
             if interrupted or state.request_denoise_completed:
                 self.state_cache.pop(state.request_id, None)
+                self.completed_request_ids.add(state.request_id)
 
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BatchRunnerOutput:
         """Execute one step for one scheduled request and return runner output."""
@@ -898,6 +953,10 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 and current_omni_platform.is_available()
             ):
                 current_omni_platform.reset_peak_memory_stats()
+            states, blocked_states = self._partition_step_ready_states(states, new_request_ids)
+            blocked_outputs = self._make_blocked_outputs(blocked_states)
+            if not states:
+                return BatchRunnerOutput.from_list(blocked_outputs)
             input_batch = self._prepare_batch_inputs(states, new_request_ids)
             attn_metadata = {}
 
@@ -915,7 +974,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                         denoise_stage_durations,
                     )
 
-                runner_output_list = []
+                runner_output_list = list(blocked_outputs)
                 pipeline_interrupted = getattr(self.pipeline, "interrupt", False)
                 if noise_pred is None and pipeline_interrupted:
                     for state in states:

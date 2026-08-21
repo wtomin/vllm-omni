@@ -507,6 +507,79 @@ class GroupCoordinator:
 
         return tensor_dict, handles, []
 
+    def tensor_dict_metadata(self, tensor_dict: dict[str, torch.Tensor | Any]) -> list[tuple[str, Any]]:
+        """Return the flattened metadata layout used by tensor-dict transfers."""
+        metadata_list, _ = _split_tensor_dict(tensor_dict)
+        return metadata_list
+
+    def isend_tensor_dict_with_layout(
+        self,
+        tensor_dict: dict[str, torch.Tensor | Any],
+        expected_metadata: list[tuple[str, Any]],
+        dst: int | None = None,
+    ) -> list[torch.distributed.Work]:
+        """Non-blocking send for a tensor dictionary with pre-agreed metadata.
+
+        This fast path skips the blocking metadata send. Both sides must derive
+        the same metadata layout before the transfer starts.
+        """
+        if not torch.distributed.is_initialized() or self.world_size == 1:
+            return []
+
+        if dst is None:
+            dst = self.group_next_rank
+        assert dst < self.world_size, f"Invalid dst rank ({dst})"
+
+        actual_metadata, tensor_list = _split_tensor_dict(tensor_dict)
+        if actual_metadata != expected_metadata:
+            raise ValueError(
+                "tensor_dict layout mismatch for known-layout send: "
+                f"actual={actual_metadata!r}, expected={expected_metadata!r}"
+            )
+
+        handles: list[torch.distributed.Work] = []
+        for tensor in tensor_list:
+            if tensor.numel() == 0:
+                continue
+            group = self.cpu_group if tensor.is_cpu else self.device_group
+            handle = torch.distributed.isend(tensor, dst=self.ranks[dst], group=group)
+            if tensor.is_cuda:
+                # Keep allocator from reusing this CUDA buffer before the async send finishes.
+                tensor.record_stream(torch.cuda.current_stream(tensor.device))
+            handles.append(handle)
+        return handles
+
+    def irecv_tensor_dict_with_layout(
+        self,
+        expected_metadata: list[tuple[str, Any]],
+        src: int | None = None,
+    ) -> tuple[dict[str, torch.Tensor | Any], list[torch.distributed.Work], list]:
+        """Non-blocking receive for a tensor dictionary with pre-agreed metadata.
+
+        Unlike irecv_tensor_dict(), this does not call recv_object(); it directly
+        allocates the expected tensors and posts async receives.
+        """
+        if not torch.distributed.is_initialized() or self.world_size == 1:
+            return {}, [], []
+
+        if src is None:
+            src = self.group_prev_rank
+        assert src < self.world_size, f"Invalid src rank ({src})"
+
+        tensor_dict: dict[str, Any] = {}
+        handles: list[torch.distributed.Work] = []
+        for key, value in expected_metadata:
+            if isinstance(value, TensorMetadata):
+                tensor = torch.empty(value.size, dtype=value.dtype, device=value.device)
+                if tensor.numel() > 0:
+                    group = self.cpu_group if tensor.is_cpu else self.device_group
+                    handles.append(torch.distributed.irecv(tensor, src=self.ranks[src], group=group))
+                _update_nested_dict(tensor_dict, key, tensor)
+            else:
+                _update_nested_dict(tensor_dict, key, value)
+
+        return tensor_dict, handles, []
+
     def send_tensor_dict(
         self,
         tensor_dict: dict[str, torch.Tensor | Any],

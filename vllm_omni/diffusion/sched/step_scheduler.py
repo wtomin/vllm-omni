@@ -83,6 +83,9 @@ class StepScheduler(BaseScheduler):
                 terminal_statuses[request_id] = DiffusionRequestStatus.FINISHED_ERROR
                 terminal_errors[request_id] = "No output for request"
                 continue
+            if getattr(req_output, "blocked", False):
+                state.error = None
+                continue
 
             req_result = req_output.result
             if req_result is not None and req_result.aborted:
