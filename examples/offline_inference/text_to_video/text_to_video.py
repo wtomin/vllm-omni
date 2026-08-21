@@ -296,6 +296,11 @@ def parse_args() -> argparse.Namespace:
         help="Enable layerwise (blockwise) offloading on DiT modules.",
     )
     parser.add_argument(
+        "--enable-distributed-layerwise-offload",
+        action="store_true",
+        help="Enable distributed layerwise offloading with H2D and AllGather overlap.",
+    )
+    parser.add_argument(
         "--audio-sample-rate",
         type=int,
         default=24000,
