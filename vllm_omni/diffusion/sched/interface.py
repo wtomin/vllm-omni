@@ -77,6 +77,15 @@ class StepBatchSamplingParamsKey:
     # differently shaped outputs and cannot share a batch.
     num_outputs_per_prompt: int = 1
 
+    # Scheduling / structural extras. Step-wise pipelines keep scheduler state
+    # per request, but rows in one denoise batch still need compatible timestep
+    # schedules and condition tensor structure.
+    num_inference_steps: int | None = None
+    sigmas: list[float] | None = None
+    sample_solver: str | None = None
+    flow_shift: float | None = None
+    condition_key: tuple[Any, ...] | None = None
+
     # LoRA identity. Requests with different adapters or scales must run in
     # separate batches so the worker can activate exactly one adapter per step.
     lora_int_id: int | None = None

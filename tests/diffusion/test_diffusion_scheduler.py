@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
+from __future__ import annotations
+
 import asyncio
 import queue
 import threading
 from types import SimpleNamespace
+from typing import TYPE_CHECKING
 
 import pytest
 import torch
 import vllm.v1.core.single_type_kv_cache_manager as native_kv_managers
-from pytest_mock import MockerFixture
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec, KVCacheTensor
 
 from vllm_omni.diffusion.data import DiffusionOutput, DiffusionRequestAbortedError
@@ -27,6 +29,9 @@ from vllm_omni.diffusion.sched import (
 from vllm_omni.diffusion.sched.interface import CachedRequestData, NewRequestData
 from vllm_omni.diffusion.worker.utils import RunnerOutput
 from vllm_omni.inputs.data import OmniDiffusionSamplingParams
+
+if TYPE_CHECKING:
+    from pytest_mock import MockerFixture
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu, pytest.mark.diffusion]
 
@@ -254,6 +259,35 @@ class TestGetStepBatchSamplingParamsKey:
         a = scheduler._build_sampling_params_key(self._make(lora_int_id=1, lora_scale=0.5))
         b = scheduler._build_sampling_params_key(self._make(lora_int_id=1, lora_scale=0.5))
         assert a == b
+
+    @pytest.mark.parametrize(
+        ("first_extra_args", "second_extra_args"),
+        [
+            ({"sample_solver": "unipc"}, {"sample_solver": "euler"}),
+            ({"flow_shift": 3.0}, {"flow_shift": 5.0}),
+        ],
+    )
+    def test_distinguishes_wan_scheduler_structure(
+        self,
+        first_extra_args: dict,
+        second_extra_args: dict,
+    ) -> None:
+        scheduler = _ConcreteScheduler()
+        first = self._make()
+        first.sampling_params.extra_args = first_extra_args
+        second = self._make()
+        second.sampling_params.extra_args = second_extra_args
+
+        assert scheduler._build_sampling_params_key(first) != scheduler._build_sampling_params_key(second)
+
+    def test_distinguishes_condition_key(self) -> None:
+        scheduler = _ConcreteScheduler()
+        first = self._make()
+        first.batch_compatibility_key = ("wan22_image_condition", True)
+        second = self._make()
+        second.batch_compatibility_key = ("wan22_image_condition", False)
+
+        assert scheduler._build_sampling_params_key(first) != scheduler._build_sampling_params_key(second)
 
 
 class TestGetRequestBatchSamplingParamsKey:
