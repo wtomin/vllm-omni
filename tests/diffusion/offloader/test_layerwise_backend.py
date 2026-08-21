@@ -13,6 +13,7 @@ import torch
 import torch.distributed as dist
 from torch import nn
 from torch.distributed.tensor import DeviceMesh, DTensor, Replicate
+from vllm.model_executor.models.utils import PPMissingLayer
 
 import vllm_omni.diffusion.offloader.layerwise_backend as layerwise_backend_module
 from vllm_omni.diffusion.offloader.layerwise_backend import LayerWiseOffloadBackend, LayerwiseOffloadHook
@@ -209,6 +210,24 @@ class _NoAttrsModel(nn.Module):
         self.blocks = nn.ModuleList([_DummyBlock() for _ in range(num_blocks)])
 
 
+class _PPStageModel(nn.Module):
+    _layerwise_offload_blocks_attrs = ["blocks"]
+
+    def __init__(self):
+        super().__init__()
+        self.start_layer = 1
+        self.end_layer = 3
+        self.local_blocks = [_DummyBlock(), _DummyBlock()]
+        self.blocks = nn.ModuleList(
+            [
+                PPMissingLayer(),
+                self.local_blocks[0],
+                self.local_blocks[1],
+                PPMissingLayer(),
+            ]
+        )
+
+
 class TestGetBlocksFromDit:
     def test_get_blocks_from_dit_single_block_attr(self):
         model = _SingleBlockModel(num_blocks=3)
@@ -249,6 +268,14 @@ class TestGetBlocksFromDit:
         attr_names, blocks = LayerWiseOffloadBackend.get_blocks_from_dit(model)
         assert attr_names == ["blocks"]
         assert len(blocks) == 2
+
+    def test_get_blocks_from_dit_filters_pp_missing_layers_to_local_stage(self):
+        model = _PPStageModel()
+        attr_names, blocks = LayerWiseOffloadBackend.get_blocks_from_dit(model)
+
+        assert attr_names == ["blocks"]
+        assert blocks == model.local_blocks
+        assert all(not isinstance(block, PPMissingLayer) for block in blocks)
 
 
 class TestGetBlocksAttrNames:
