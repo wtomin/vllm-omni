@@ -1,9 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
 from enum import Enum
+
+PIPEFUSION_KV_MAX_TOKENS = 262144
+PIPEFUSION_KV_MAX_CPU_BYTES = 64 * 1024**3
 
 
 class DiffusionKVCacheMode(str, Enum):
@@ -42,3 +45,10 @@ def parse_diffusion_kv_cache_mode(value: object) -> DiffusionKVCacheMode:
 def is_scheduler_paged_kv_mode(mode: DiffusionKVCacheMode) -> bool:
     """Return whether a parsed cache mode uses Scheduler-owned paging."""
     return mode is DiffusionKVCacheMode.PAGED_SCHEDULER
+
+
+def is_pipefusion_managed_kv(od_config: object) -> bool:
+    """Return whether dense PipeFusion uses scheduler/worker-managed rows."""
+
+    parallel_config = getattr(od_config, "parallel_config", None)
+    return bool(getattr(parallel_config, "enable_pipefusion", False))

@@ -35,6 +35,8 @@ Environment overrides:
   GPU_COUNT=4                  Default card count used to build CUDA_VISIBLE_DEVICES.
   CUDA_VISIBLE_DEVICES=0,1,2,3  Explicit device list.
   MODEL_ID=/path/to/model       Local model dir or HuggingFace repo id.
+  VLLM_OMNI_PIPEFUSION_KV_CACHE_OFFLOAD=1
+                                  Offload inactive PipeFusion K/V to CPU RAM.
 EOF
 }
 
@@ -130,6 +132,11 @@ run_case() {
       )
       ;;
     pipefusion)
+      env_args=(
+        "VLLM_OMNI_PIPEFUSION_KV_CACHE_OFFLOAD=${VLLM_OMNI_PIPEFUSION_KV_CACHE_OFFLOAD:-0}"
+        "VLLM_OMNI_PIPEFUSION_KV_CACHE_PIN_MEMORY=${VLLM_OMNI_PIPEFUSION_KV_CACHE_PIN_MEMORY:-1}"
+        "VLLM_OMNI_PIPEFUSION_KV_CACHE_PREFETCH_LAYERS=${VLLM_OMNI_PIPEFUSION_KV_CACHE_PREFETCH_LAYERS:-1}"
+      )
       parallel_args=(
         --pipeline-parallel-size "${PIPEFUSION_PIPELINE_PARALLEL_SIZE:-${num_devices}}"
         --vae-patch-parallel-size "${num_devices}"

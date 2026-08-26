@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -17,8 +17,12 @@ from vllm.v1.worker.gpu.attn_utils import init_attn_backend, init_kv_cache
 from vllm.v1.worker.gpu.block_table import BlockTables
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
-from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode, is_scheduler_paged_kv_mode
-from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
+from vllm_omni.diffusion.diffusion_kv.config import (
+    DiffusionKVCacheMode,
+    is_pipefusion_managed_kv,
+    is_scheduler_paged_kv_mode,
+)
+from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata, PipeFusionKVRowBinding
 from vllm_omni.diffusion.diffusion_kv.paged_attention_adapter import (
     DiffusionPagedAttentionAdapter,
     DiffusionPagedAttentionLayerAdapter,
@@ -29,6 +33,7 @@ from vllm_omni.diffusion.diffusion_kv.paged_attention_adapter import (
 from vllm_omni.platforms import current_omni_platform
 
 DiffusionKVIdentity = tuple[str, int | None, str | None]
+PipeFusionKVIdentity = tuple[str, int, str]
 DiffusionKVSnapshot = tuple[object, ...]
 
 
@@ -67,6 +72,13 @@ class DiffusionKVModelRunnerBackend:
         self._diffusion_kv_identity_to_row: dict[DiffusionKVIdentity, int] = {}
         self._diffusion_kv_free_rows: list[int] = []
         self._diffusion_kv_request_states: dict[str, _DiffusionKVRequestState] = {}
+        self._pipefusion_identity_to_binding: dict[PipeFusionKVIdentity, PipeFusionKVRowBinding] = {}
+        self._pipefusion_request_generations: dict[str, int] = {}
+        self._pipefusion_free_rows: list[int] = []
+        if is_pipefusion_managed_kv(od_config):
+            max_rows_per_request = getattr(od_config, "diffusion_kv_max_rows_per_request", None) or 2
+            max_num_seqs = getattr(od_config, "max_num_seqs", 1)
+            self._pipefusion_free_rows = list(range(max_num_seqs * max_rows_per_request - 1, -1, -1))
 
     def register_kv_cache_layers(
         self,
@@ -150,6 +162,7 @@ class DiffusionKVModelRunnerBackend:
 
         if attention_geometry is not None:
             num_heads, num_kv_heads, head_size = attention_geometry
+            assert callable(set_attention_geometry)
             try:
                 set_attention_geometry(
                     num_heads=num_heads,
@@ -480,6 +493,8 @@ class DiffusionKVModelRunnerBackend:
 
     def install_diffusion_kv_metadata(self, metadata: DiffusionKVMetadata) -> bool:
         """Install one Scheduler allocation snapshot into native Worker rows."""
+        if is_pipefusion_managed_kv(self.od_config):
+            return self._install_pipefusion_kv_metadata(metadata)
         if not is_scheduler_paged_kv_mode(
             getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
         ):
@@ -533,6 +548,70 @@ class DiffusionKVModelRunnerBackend:
             row_token_lens=tuple((install.identity, install.token_len) for install in installs),
         )
         return True
+
+    def _install_pipefusion_kv_metadata(self, metadata: DiffusionKVMetadata) -> bool:
+        """Install logical dense row bindings without native BlockTables."""
+
+        if not metadata.request_id:
+            raise ValueError("PipeFusion KV metadata request_id must be non-empty")
+        current_generation = self._pipefusion_request_generations.get(metadata.request_id)
+        if current_generation is not None:
+            if metadata.allocation_generation < current_generation:
+                raise ValueError(
+                    f"Stale PipeFusion KV allocation generation {metadata.allocation_generation} "
+                    f"for request {metadata.request_id!r}"
+                )
+            if metadata.allocation_generation == current_generation:
+                return False
+            raise ValueError(
+                f"Active PipeFusion KV request {metadata.request_id!r} cannot replace its allocation generation"
+            )
+
+        identities: list[PipeFusionKVIdentity] = []
+        for sequence in metadata.sequences:
+            if sequence.logical_sequence_id is None or sequence.cache_branch is None:
+                raise ValueError("Managed PipeFusion metadata requires logical_sequence_id and cache_branch")
+            identity = (
+                metadata.request_id,
+                sequence.logical_sequence_id,
+                sequence.cache_branch,
+            )
+            if identity in identities or identity in self._pipefusion_identity_to_binding:
+                raise ValueError(f"Duplicate PipeFusion KV row identity: {identity!r}")
+            identities.append(identity)
+        if len(identities) > len(self._pipefusion_free_rows):
+            raise ValueError(
+                f"PipeFusion KV request {metadata.request_id!r} requires {len(identities)} rows, "
+                f"but only {len(self._pipefusion_free_rows)} rows are free"
+            )
+
+        rows = list(reversed(self._pipefusion_free_rows[-len(identities) :])) if identities else []
+        if rows:
+            del self._pipefusion_free_rows[-len(rows) :]
+        for identity, sequence, row in zip(identities, metadata.sequences, rows, strict=True):
+            self._pipefusion_identity_to_binding[identity] = PipeFusionKVRowBinding(
+                row_index=row,
+                sequence_id=sequence.sequence_id,
+                max_seq_len=sequence.seq_len,
+            )
+        self._pipefusion_request_generations[metadata.request_id] = metadata.allocation_generation
+        return True
+
+    def get_pipefusion_kv_row_binding(
+        self,
+        request_id: str,
+        logical_sequence_id: int,
+        cfg_branch: str,
+    ) -> PipeFusionKVRowBinding:
+        """Resolve a dense PipeFusion identity to its installed logical row."""
+
+        if not is_pipefusion_managed_kv(self.od_config):
+            raise RuntimeError("Managed PipeFusion KV rows are not enabled")
+        identity = (request_id, logical_sequence_id, cfg_branch)
+        try:
+            return self._pipefusion_identity_to_binding[identity]
+        except KeyError as exc:
+            raise KeyError(f"No PipeFusion KV row is installed for {identity!r}") from exc
 
     def get_diffusion_kv_row(
         self,
@@ -598,6 +677,20 @@ class DiffusionKVModelRunnerBackend:
 
     def remove_diffusion_kv_requests(self, request_ids: list[str]) -> int:
         """Retire Worker rows without logically freeing Scheduler-owned blocks."""
+        if is_pipefusion_managed_kv(self.od_config):
+            request_id_set = set(request_ids)
+            removed = [
+                (identity, binding)
+                for identity, binding in self._pipefusion_identity_to_binding.items()
+                if identity[0] in request_id_set
+            ]
+            for pf_identity, binding in removed:
+                del self._pipefusion_identity_to_binding[pf_identity]
+                self._pipefusion_free_rows.append(binding.row_index)
+            for request_id in request_id_set:
+                self._pipefusion_request_generations.pop(request_id, None)
+            self._pipefusion_free_rows.sort(reverse=True)
+            return len(removed)
         if (
             not is_scheduler_paged_kv_mode(
                 getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
@@ -625,8 +718,8 @@ class DiffusionKVModelRunnerBackend:
             ]
             self._apply_rows(rows, installs)
 
-        for identity, _ in identities_and_rows:
-            del self._diffusion_kv_identity_to_row[identity]
+        for diffusion_identity, _ in identities_and_rows:
+            del self._diffusion_kv_identity_to_row[diffusion_identity]
         for request_id in request_id_set:
             self._diffusion_kv_request_states.pop(request_id, None)
         self._diffusion_kv_free_rows.extend(rows)

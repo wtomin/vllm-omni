@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -13,7 +13,12 @@ from vllm.logger import init_logger
 from vllm.v1.kv_cache_interface import KVCacheConfig
 
 from vllm_omni.diffusion.data import OmniDiffusionConfig
-from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
+from vllm_omni.diffusion.diffusion_kv.config import (
+    PIPEFUSION_KV_MAX_CPU_BYTES,
+    PIPEFUSION_KV_MAX_TOKENS,
+    DiffusionKVCacheMode,
+    is_pipefusion_managed_kv,
+)
 from vllm_omni.diffusion.diffusion_kv.manager import DiffusionKVAdmissionError, DiffusionKVCacheManager
 from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
 from vllm_omni.diffusion.request import OmniDiffusionRequest
@@ -83,6 +88,11 @@ class BaseScheduler(ABC):
             getattr(od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
             is DiffusionKVCacheMode.PAGED_SCHEDULER
         )
+        pipefusion_kv_enabled = is_pipefusion_managed_kv(od_config)
+        if pipefusion_kv_enabled:
+            # PipeFusionRuntime currently carries one active request identity
+            # while the dense tensor owns its output batch dimension.
+            self.max_num_running_reqs = 1
         if diffusion_kv_enabled:
             if kv_cache_config is None:
                 raise ValueError("paged_scheduler Diffusion KV requires a native Scheduler KVCacheConfig")
@@ -97,6 +107,16 @@ class BaseScheduler(ABC):
                 hash_block_size=hash_block_size,
                 max_in_flight_tokens=kv_vllm_config.max_in_flight_tokens,
             )
+        elif pipefusion_kv_enabled:
+            max_rows_per_request = getattr(od_config, "diffusion_kv_max_rows_per_request", None) or 2
+            self._diffusion_kv_manager = DiffusionKVCacheManager(
+                None,
+                max_model_len=PIPEFUSION_KV_MAX_TOKENS,
+                scheduler_block_size=1,
+                hash_block_size=1,
+                max_logical_rows=self.max_num_running_reqs * max_rows_per_request,
+                max_logical_bytes=PIPEFUSION_KV_MAX_CPU_BYTES,
+            )
         else:
             if any(
                 value is not None
@@ -107,7 +127,7 @@ class BaseScheduler(ABC):
                     kv_vllm_config,
                 )
             ):
-                raise ValueError("dense_legacy Scheduler received unexpected Diffusion KV cache initialization state")
+                raise ValueError("dense Scheduler received unexpected Diffusion KV cache initialization state")
             self._diffusion_kv_manager = None
         self._reset_scheduler_state()
 
@@ -369,9 +389,10 @@ class BaseScheduler(ABC):
     def _make_request_state(self, request_id: str, request: OmniDiffusionRequest) -> SchedulerRequestState:
         kv_requests = request.diffusion_kv_requests or ()
         if self._diffusion_kv_manager is not None:
-            self._reject_legacy_dense_kv(request)
+            if not is_pipefusion_managed_kv(self.od_config):
+                self._reject_legacy_dense_kv(request)
             if not kv_requests:
-                raise ValueError("paged_scheduler request preprocessing did not produce DiffusionKVRequest state")
+                raise ValueError("managed Diffusion KV request preprocessing did not produce DiffusionKVRequest state")
         elif kv_requests:
             raise ValueError("dense_legacy request unexpectedly contains Scheduler Diffusion KV requests")
 

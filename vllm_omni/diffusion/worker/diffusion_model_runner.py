@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """
 Diffusion Model Runner for vLLM-Omni.
 
@@ -33,8 +33,8 @@ from vllm_omni.diffusion.cache.prompt_embed_cache import (
 from vllm_omni.diffusion.cache.selector import get_cache_backend
 from vllm_omni.diffusion.compile import regionally_compile
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode
-from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata
+from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode, is_pipefusion_managed_kv
+from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata, PipeFusionKVRowBinding
 from vllm_omni.diffusion.diffusion_kv.model_runner_backend import DiffusionKVModelRunnerBackend
 from vllm_omni.diffusion.diffusion_kv.paged_attention_adapter import (
     DiffusionPagedAttentionRow,
@@ -211,9 +211,10 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         metadata: DiffusionKVMetadata | None,
     ) -> None:
         cache_mode = getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
-        if cache_mode is DiffusionKVCacheMode.PAGED_SCHEDULER and metadata is None:
+        managed_pipefusion = is_pipefusion_managed_kv(self.od_config)
+        if (cache_mode is DiffusionKVCacheMode.PAGED_SCHEDULER or managed_pipefusion) and metadata is None:
             raise ValueError(f"paged_scheduler request {request_id!r} requires Diffusion KV metadata")
-        if cache_mode is not DiffusionKVCacheMode.PAGED_SCHEDULER and metadata is not None:
+        if cache_mode is not DiffusionKVCacheMode.PAGED_SCHEDULER and not managed_pipefusion and metadata is not None:
             raise ValueError(f"{cache_mode.value} request {request_id!r} must not carry Diffusion KV metadata")
 
         if metadata is not None and metadata.request_id != request_id:
@@ -283,6 +284,13 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
             od_config=self.od_config,
             device=self.device,
         )
+        if is_pipefusion_managed_kv(self.od_config):
+            from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
+                get_pipefusion_runtime,
+            )
+
+            pipefusion_runtime = get_pipefusion_runtime()
+            pipefusion_runtime.set_kv_row_binding_resolver(self.get_pipefusion_kv_row_binding)
 
         load_device = (
             "cpu"
@@ -449,6 +457,18 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         context_id: str | None = None,
     ) -> int:
         return self.diffusion_kv_backend.get_diffusion_kv_row(request_id, sequence_id, context_id)
+
+    def get_pipefusion_kv_row_binding(
+        self,
+        request_id: str,
+        logical_sequence_id: int,
+        cfg_branch: str,
+    ) -> PipeFusionKVRowBinding:
+        return self.diffusion_kv_backend.get_pipefusion_kv_row_binding(
+            request_id,
+            logical_sequence_id,
+            cfg_branch,
+        )
 
     def remove_diffusion_kv_requests(self, request_ids: list[str]) -> int:
         return self.diffusion_kv_backend.remove_diffusion_kv_requests(request_ids)
@@ -1011,8 +1031,8 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
         if (
             getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
             is DiffusionKVCacheMode.PAGED_SCHEDULER
-            and scheduler_output.finished_req_ids
-        ):
+            or is_pipefusion_managed_kv(self.od_config)
+        ) and scheduler_output.finished_req_ids:
             self.remove_diffusion_kv_requests(list(scheduler_output.finished_req_ids))
         installed_request_ids: list[str] = []
         try:
@@ -1167,8 +1187,8 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 if (
                     getattr(self.od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
                     is DiffusionKVCacheMode.PAGED_SCHEDULER
-                    and terminal_request_ids
-                ):
+                    or is_pipefusion_managed_kv(self.od_config)
+                ) and terminal_request_ids:
                     self.remove_diffusion_kv_requests(terminal_request_ids)
 
                 return BatchRunnerOutput.from_list(runner_output_list)

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 """Scheduler-to-Worker allocation payloads for diffusion KV.
 
@@ -41,6 +41,17 @@ class DiffusionKVSequenceMetadata:
     seq_len: int
     block_ids: tuple[list[int], ...]
     context_ids: tuple[str, ...] = ()
+    logical_sequence_id: int | None = None
+    cache_branch: str | None = None
+
+
+@dataclass(frozen=True)
+class PipeFusionKVRowBinding:
+    """Worker-local logical row bound to one dense PipeFusion cache identity."""
+
+    row_index: int
+    sequence_id: int
+    max_seq_len: int
 
 
 @dataclass

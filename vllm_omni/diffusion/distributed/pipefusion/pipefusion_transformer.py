@@ -10,6 +10,10 @@ from functools import wraps
 import torch
 
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.distributed.pipefusion.dense_kv_store import (
+    PipeFusionDenseKVStore,
+    PipeFusionPatchLayout,
+)
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
     PipeFusionCacheIdentity,
     get_pipefusion_runtime,
@@ -125,6 +129,11 @@ class PipeFusionSelfAttentionMixin(ABC):
             @wraps(init)
             def wrapped_init(self, *args, **kwargs):
                 init(self, *args, **kwargs)
+                self._pipefusion_layer_id = str(kwargs.get("prefix") or type(self).__name__)
+                runtime = get_pipefusion_runtime()
+                runtime.register_kv_layer(self._pipefusion_layer_id)
+                self._pipefusion_kv_store = PipeFusionDenseKVStore(runtime.get_kv_offload_manager())
+                self._kv_caches = {}
                 for module in self.modules():
                     if isinstance(module, Attention):
                         self._pipefusion_patch_attention(module)
@@ -138,31 +147,52 @@ class PipeFusionSelfAttentionMixin(ABC):
             query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, attn_metadata=None
         ) -> torch.Tensor:
             key, value = self._pipefusion_update_kv_cache(key, value)
-            return original_forward(query, key, value, attn_metadata)
+            output = original_forward(query, key, value, attn_metadata)
+            self._ensure_pipefusion_kv_store().offload(
+                get_pipefusion_runtime().cache_identity,
+                self._pipefusion_layer_id,
+            )
+            get_pipefusion_runtime().prefetch_following_layers(
+                get_pipefusion_runtime().cache_identity,
+                self._pipefusion_layer_id,
+            )
+            self._sync_pipefusion_cache_view()
+            return output
 
         attention.forward = pipefusion_forward
 
     def pipefusion_reset_cache(self, request_id: str | None = None, sequence_id: int | None = None) -> None:
+        store = self._ensure_pipefusion_kv_store()
         if request_id is None and sequence_id is None:
-            self._kv_caches = {}
+            store.clear()
+            self._sync_pipefusion_cache_view()
             return
-        self._kv_caches = {
-            cache_identity: cache
-            for cache_identity, cache in self._kv_caches.items()
-            if cache_identity[0] != request_id or cache_identity[1] != sequence_id
-        }
+        if request_id is None:
+            raise ValueError("request_id is required when sequence_id is provided")
+        store.reset_request(request_id, sequence_id)
+        self._sync_pipefusion_cache_view()
+
+    def _ensure_pipefusion_kv_store(self) -> PipeFusionDenseKVStore:
+        if not hasattr(self, "_pipefusion_layer_id"):
+            self._pipefusion_layer_id = type(self).__name__
+        if not hasattr(self, "_pipefusion_kv_store"):
+            runtime = get_pipefusion_runtime()
+            runtime.register_kv_layer(self._pipefusion_layer_id)
+            self._pipefusion_kv_store = PipeFusionDenseKVStore(runtime.get_kv_offload_manager())
+        return self._pipefusion_kv_store
+
+    def _sync_pipefusion_cache_view(self) -> None:
+        self._kv_caches = self._ensure_pipefusion_kv_store().cache_view(self._pipefusion_layer_id)
 
     def _get_kv_cache(self, cache_key: PipeFusionCacheIdentity) -> tuple[torch.Tensor, torch.Tensor]:
-        if cache_key not in self._kv_caches:
-            raise RuntimeError(
-                f"PipeFusion KV cache for {cache_key!r} is missing. "
-                "Run at least one warmup step before patched execution."
-            )
-        return self._kv_caches[cache_key]
+        cache = self._ensure_pipefusion_kv_store().get_full(cache_key, self._pipefusion_layer_id)
+        self._sync_pipefusion_cache_view()
+        return cache
 
     def _set_kv_cache(self, cache_key: PipeFusionCacheIdentity, k: torch.Tensor, v: torch.Tensor):
         """Store the KV cache for the given request/sequence/CFG identity."""
-        self._kv_caches[cache_key] = (k, v)
+        self._ensure_pipefusion_kv_store().put_full(cache_key, self._pipefusion_layer_id, k, v)
+        self._sync_pipefusion_cache_view()
 
     def _pipefusion_update_kv_cache(
         self,
@@ -191,47 +221,28 @@ class PipeFusionSelfAttentionMixin(ABC):
             (full_key, full_value) for attention computation.
         """
         runtime = get_pipefusion_runtime()
+        if key.shape[1] != value.shape[1]:
+            raise ValueError(
+                f"PipeFusion K/V sequence lengths must match, got key={key.shape[1]}, value={value.shape[1]}"
+            )
+        runtime.validate_kv_row_binding(key.shape[1])
         cache_identity = runtime.cache_identity
         if runtime.patch_mode:
-            full_k, full_v = self._get_kv_cache(cache_identity)
-            ppf = runtime.ppf
-            pph = runtime.pph
-            ppw = runtime.ppw
-            num_pipeline_patch = runtime.num_pipeline_patch
-            patch_idx = runtime.patch_idx_tensor
-            B, _, heads, dim = key.shape
-
-            if runtime.split_dim == "temporal":
-                base_patch_size = ppf // num_pipeline_patch
-                patch_start = patch_idx * base_patch_size
-                is_last = patch_idx == num_pipeline_patch - 1
-                patch_end = patch_start + base_patch_size + is_last * (ppf - patch_start - base_patch_size)
-
-                # Temporal split: tokens are contiguous in [f, h, w] order
-                # because frames are the outermost dimension.
-                # Patch covers f∈[f_start, f_end), token range is contiguous.
-                tok_start = patch_start * pph * ppw
-                tok_end = patch_end * pph * ppw
-                tok_len = tok_end - tok_start
-                full_k.narrow(1, tok_start, tok_len).copy_(key)
-                full_v.narrow(1, tok_start, tok_len).copy_(value)
-            else:
-                base_patch_size = pph // num_pipeline_patch
-                patch_start = patch_idx * base_patch_size
-                is_last = patch_idx == num_pipeline_patch - 1
-                patch_end = patch_start + base_patch_size + is_last * (pph - patch_start - base_patch_size)
-
-                # Height split: tokens are NON-contiguous (interleaved by frames).
-                # Reshape to 5D [B, ppf, pph, ppw, heads, dim] and slice height.
-                pph_patch = patch_end - patch_start
-                key_5d = key.reshape(B, ppf, pph_patch, ppw, heads, dim)
-                value_5d = value.reshape(B, ppf, pph_patch, ppw, heads, dim)
-                full_k_5d = full_k.view(B, ppf, pph, ppw, heads, dim)
-                full_v_5d = full_v.view(B, ppf, pph, ppw, heads, dim)
-                patch_len = patch_end - patch_start
-                full_k_5d.narrow(2, patch_start, patch_len).copy_(key_5d)
-                full_v_5d.narrow(2, patch_start, patch_len).copy_(value_5d)
-
+            full_k, full_v = self._ensure_pipefusion_kv_store().update_patch(
+                cache_identity,
+                self._pipefusion_layer_id,
+                runtime.patch_idx_tensor,
+                key,
+                value,
+                layout=PipeFusionPatchLayout(
+                    split_dim=runtime.split_dim,
+                    ppf=runtime.ppf,
+                    pph=runtime.pph,
+                    ppw=runtime.ppw,
+                    num_pipeline_patch=runtime.num_pipeline_patch,
+                ),
+            )
+            self._sync_pipefusion_cache_view()
             return full_k, full_v
         else:
             if runtime.update_warmup_cache:

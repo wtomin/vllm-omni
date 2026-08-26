@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -64,6 +64,9 @@ class DiffusionKVRequest:
         seq_len: int,
         block_hashes: Sequence[BlockHash] = (),
         kv_contexts: Sequence[DiffusionKVContext] = (),
+        logical_sequence_id: int | None = None,
+        cache_branch: str | None = None,
+        estimated_bytes: int = 0,
     ) -> None:
         if not request_id:
             raise ValueError("request_id must be non-empty")
@@ -80,6 +83,12 @@ class DiffusionKVRequest:
                 "prefix_len + target_len must not exceed seq_len: "
                 f"prefix_len={prefix_len}, target_len={target_len}, seq_len={seq_len}"
             )
+        if logical_sequence_id is not None and logical_sequence_id < 0:
+            raise ValueError(f"logical_sequence_id must be non-negative, got {logical_sequence_id}")
+        if cache_branch is not None and cache_branch not in ("inputs", "inputs_uncond"):
+            raise ValueError(f"cache_branch must be 'inputs', 'inputs_uncond', or None, got {cache_branch!r}")
+        if estimated_bytes < 0:
+            raise ValueError(f"estimated_bytes must be non-negative, got {estimated_bytes}")
 
         contexts = tuple(kv_contexts)
         if any(not isinstance(context, DiffusionKVContext) for context in contexts):
@@ -93,6 +102,9 @@ class DiffusionKVRequest:
         self.prefix_len = prefix_len
         self.target_len = target_len
         self.kv_contexts = contexts
+        self.logical_sequence_id = logical_sequence_id
+        self.cache_branch = cache_branch
+        self.estimated_bytes = estimated_bytes
 
         # Native vLLM Request surface. Keep this list intentionally small and
         # cover it with real-KVCacheManager conformance tests.

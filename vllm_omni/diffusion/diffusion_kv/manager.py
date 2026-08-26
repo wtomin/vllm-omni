@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from __future__ import annotations
 
@@ -24,33 +24,49 @@ class DiffusionKVCacheManager:
 
     def __init__(
         self,
-        kv_cache_config: KVCacheConfig,
+        kv_cache_config: KVCacheConfig | None,
         *,
         max_model_len: int,
         scheduler_block_size: int,
         hash_block_size: int,
         max_in_flight_tokens: int | None = None,
+        max_logical_rows: int | None = None,
+        max_logical_bytes: int | None = None,
     ) -> None:
         if max_model_len <= 0:
             raise ValueError(f"max_model_len must be positive, got {max_model_len}")
-        if kv_cache_config.num_blocks <= 0 or not kv_cache_config.kv_cache_groups:
+        if kv_cache_config is not None and (kv_cache_config.num_blocks <= 0 or not kv_cache_config.kv_cache_groups):
             raise ValueError("Diffusion KVCacheConfig must contain a positive block pool and at least one group")
-        if scheduler_block_size <= 0 or hash_block_size <= 0:
+        if kv_cache_config is not None and (scheduler_block_size <= 0 or hash_block_size <= 0):
             raise ValueError("scheduler_block_size and hash_block_size must be positive")
         if max_in_flight_tokens is not None and max_in_flight_tokens <= 0:
             raise ValueError(f"max_in_flight_tokens must be positive when provided, got {max_in_flight_tokens}")
-        self.native_manager = KVCacheManager(
-            kv_cache_config=kv_cache_config,
-            max_model_len=max_model_len,
-            scheduler_block_size=scheduler_block_size,
-            hash_block_size=hash_block_size,
-            max_in_flight_tokens=max_in_flight_tokens,
-            enable_caching=False,
+        if kv_cache_config is None and (type(max_logical_rows) is not int or max_logical_rows <= 0):
+            raise ValueError("Logical Diffusion KV management requires a positive max_logical_rows")
+        if max_logical_bytes is not None and max_logical_bytes <= 0:
+            raise ValueError("max_logical_bytes must be positive when provided")
+        self.native_manager = (
+            KVCacheManager(
+                kv_cache_config=kv_cache_config,
+                max_model_len=max_model_len,
+                scheduler_block_size=scheduler_block_size,
+                hash_block_size=hash_block_size,
+                max_in_flight_tokens=max_in_flight_tokens,
+                enable_caching=False,
+            )
+            if kv_cache_config is not None
+            else None
         )
         self.max_model_len = max_model_len
         # Native vLLM may reserve a null block, so an idle BlockPool does not
         # necessarily report ``kv_cache_config.num_blocks`` free blocks.
-        self._empty_pool_num_free_blocks = self.native_manager.block_pool.get_num_free_blocks()
+        self._empty_pool_num_free_blocks = (
+            self.native_manager.block_pool.get_num_free_blocks() if self.native_manager is not None else 0
+        )
+        self._max_logical_rows = max_logical_rows
+        self._used_logical_rows = 0
+        self._max_logical_bytes = max_logical_bytes
+        self._used_logical_bytes = 0
         self._requests: dict[str, tuple[DiffusionKVRequest, ...]] = {}
         self._metadata: dict[str, DiffusionKVMetadata] = {}
         self._internal_request_ids: set[str] = set()
@@ -66,6 +82,8 @@ class DiffusionKVCacheManager:
         that can never fit is rejected independently of current pool usage.
         """
 
+        if self.native_manager is None:
+            return len(requests)
         coordinator = self.native_manager.coordinator
         empty_blocks = self.native_manager.empty_kv_cache_blocks.blocks
         return sum(
@@ -123,27 +141,47 @@ class DiffusionKVCacheManager:
                 )
 
         required_blocks = self._get_empty_pool_required_blocks(requests)
-        if required_blocks > self._empty_pool_num_free_blocks:
+        if self.native_manager is not None:
+            available_capacity = self._empty_pool_num_free_blocks
+        else:
+            assert self._max_logical_rows is not None
+            available_capacity = self._max_logical_rows - self._used_logical_rows
+        if self.native_manager is not None and required_blocks > available_capacity:
             raise DiffusionKVAdmissionError(
                 f"Diffusion KV request {public_request_id!r} cannot fit even when the block pool is empty: "
                 f"required_blocks={required_blocks}, available_blocks={self._empty_pool_num_free_blocks}; "
                 "increase KV cache capacity or reduce the request sequence count/length"
             )
+        if self.native_manager is None and required_blocks > available_capacity:
+            return None
+        required_bytes = sum(request.estimated_bytes for request in requests)
+        if self.native_manager is None and self._max_logical_bytes is not None:
+            if required_bytes > self._max_logical_bytes:
+                raise DiffusionKVAdmissionError(
+                    f"PipeFusion KV request {public_request_id!r} exceeds the CPU offload budget: "
+                    f"required_bytes={required_bytes}, max_bytes={self._max_logical_bytes}"
+                )
+            if required_bytes > self._max_logical_bytes - self._used_logical_bytes:
+                return None
 
         allocated: list[DiffusionKVRequest] = []
         sequence_metadata: list[DiffusionKVSequenceMetadata] = []
         try:
             for request in requests:
-                blocks = self.native_manager.allocate_slots(
-                    request,
-                    num_new_tokens=request.seq_len,
-                    delay_cache_blocks=True,
-                    full_sequence_must_fit=True,
-                )
-                if blocks is None:
-                    self._rollback(allocated)
-                    allocated.clear()
-                    return None
+                if self.native_manager is None:
+                    block_ids: tuple[list[int], ...] = ()
+                else:
+                    blocks = self.native_manager.allocate_slots(
+                        request,
+                        num_new_tokens=request.seq_len,
+                        delay_cache_blocks=True,
+                        full_sequence_must_fit=True,
+                    )
+                    if blocks is None:
+                        self._rollback(allocated)
+                        allocated.clear()
+                        return None
+                    block_ids = blocks.get_block_ids()
                 allocated.append(request)
                 sequence_metadata.append(
                     DiffusionKVSequenceMetadata(
@@ -151,7 +189,9 @@ class DiffusionKVCacheManager:
                         prefix_len=request.prefix_len,
                         target_len=request.target_len,
                         seq_len=request.seq_len,
-                        block_ids=blocks.get_block_ids(),
+                        block_ids=block_ids,
+                        logical_sequence_id=request.logical_sequence_id,
+                        cache_branch=request.cache_branch,
                     )
                 )
         except Exception:
@@ -167,6 +207,9 @@ class DiffusionKVCacheManager:
         self._requests[public_request_id] = requests
         self._metadata[public_request_id] = metadata
         self._internal_request_ids.update(internal_ids)
+        if self.native_manager is None:
+            self._used_logical_rows += len(requests)
+            self._used_logical_bytes += required_bytes
         return metadata
 
     def get_metadata(self, public_request_id: str) -> DiffusionKVMetadata:
@@ -179,13 +222,19 @@ class DiffusionKVCacheManager:
         requests = self._requests.pop(public_request_id, ())
         self._metadata.pop(public_request_id, None)
         for request in reversed(requests):
-            self.native_manager.free(request)
+            if self.native_manager is not None:
+                self.native_manager.free(request)
             self._internal_request_ids.discard(request.request_id)
+        if self.native_manager is None:
+            self._used_logical_rows -= len(requests)
+            self._used_logical_bytes -= sum(request.estimated_bytes for request in requests)
 
     def close(self) -> None:
         for public_request_id in tuple(self._requests):
             self.free_request(public_request_id)
 
     def _rollback(self, requests: Sequence[DiffusionKVRequest]) -> None:
+        if self.native_manager is None:
+            return
         for request in reversed(requests):
             self.native_manager.free(request)

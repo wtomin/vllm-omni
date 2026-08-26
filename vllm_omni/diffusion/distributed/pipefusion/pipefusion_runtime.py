@@ -14,19 +14,161 @@ and transformer mixins.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 import torch
 from vllm.logger import init_logger
 
+from vllm_omni.diffusion.diffusion_kv.config import PIPEFUSION_KV_MAX_TOKENS
 from vllm_omni.diffusion.distributed.parallel_state import get_pipeline_parallel_world_size, get_pp_group
 
 logger = init_logger(__name__)
+
+if TYPE_CHECKING:
+    from vllm_omni.diffusion.data import OmniDiffusionConfig
+    from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
+    from vllm_omni.diffusion.distributed.pipefusion.offload import PipeFusionKVOffloadManager
+    from vllm_omni.diffusion.request import OmniDiffusionRequest
 
 PipeFusionBranchKey = Literal["inputs", "inputs_uncond"]
 PipeFusionCacheIdentity = tuple[str | None, int | None, PipeFusionBranchKey]
 
 _PF_RUNTIME: PipeFusionRuntime | None = None
+
+
+def get_pipefusion_token_capacity(
+    latent_shape: tuple[int, int, int],
+    patch_size: tuple[int, int, int],
+) -> int:
+    """Return the full post-patch token count for one dense KV row."""
+
+    if len(latent_shape) != 3 or len(patch_size) != 3:
+        raise ValueError("PipeFusion latent_shape and patch_size must contain (frames, height, width)")
+    if any(type(value) is not int or value <= 0 for value in (*latent_shape, *patch_size)):
+        raise ValueError("PipeFusion latent dimensions and patch dimensions must be positive integers")
+    if any(size % patch != 0 for size, patch in zip(latent_shape, patch_size, strict=True)):
+        raise ValueError(f"PipeFusion latent shape {latent_shape!r} must be divisible by patch size {patch_size!r}")
+    return latent_shape[0] // patch_size[0] * (latent_shape[1] // patch_size[1]) * (latent_shape[2] // patch_size[2])
+
+
+def build_pipefusion_kv_requests(
+    request_id: str,
+    *,
+    token_capacity: int,
+    sequence_count: int = 1,
+    cfg_branches: tuple[PipeFusionBranchKey, ...] = ("inputs",),
+    estimated_bytes_per_row: int = 0,
+) -> tuple[DiffusionKVRequest, ...]:
+    """Build contiguous diffusion_kv rows for PipeFusion sequences/branches."""
+
+    from vllm_omni.diffusion.diffusion_kv.request import DiffusionKVRequest
+
+    if not request_id:
+        raise ValueError("PipeFusion request_id must be non-empty")
+    if token_capacity <= 0:
+        raise ValueError("PipeFusion token_capacity must be positive")
+    if sequence_count <= 0:
+        raise ValueError("PipeFusion sequence_count must be positive")
+    if estimated_bytes_per_row < 0:
+        raise ValueError("PipeFusion estimated_bytes_per_row must be non-negative")
+    if not cfg_branches or len(cfg_branches) != len(set(cfg_branches)):
+        raise ValueError("PipeFusion cfg_branches must be non-empty and unique")
+
+    requests: list[DiffusionKVRequest] = []
+    row_id = 0
+    for logical_sequence_id in range(sequence_count):
+        for branch in cfg_branches:
+            if branch not in ("inputs", "inputs_uncond"):
+                raise ValueError(f"Invalid PipeFusion cache branch: {branch!r}")
+            requests.append(
+                DiffusionKVRequest(
+                    f"{request_id}:pf:{logical_sequence_id}:{branch}",
+                    sequence_id=row_id,
+                    logical_sequence_id=logical_sequence_id,
+                    cache_branch=branch,
+                    prefix_len=0,
+                    target_len=token_capacity,
+                    seq_len=token_capacity,
+                    estimated_bytes=estimated_bytes_per_row,
+                )
+            )
+            row_id += 1
+    return tuple(requests)
+
+
+def attach_pipefusion_kv_requests(
+    request: OmniDiffusionRequest,
+    od_config: OmniDiffusionConfig,
+) -> None:
+    """Attach Scheduler-only dense rows using the request's final Wan shape."""
+
+    parallel_config = od_config.parallel_config
+    if not getattr(parallel_config, "enable_pipefusion", False):
+        return
+    sampling = request.sampling_params
+    height = sampling.height or 480
+    width = sampling.width or 832
+    num_frames = sampling.num_frames or 81
+    transformer_config = od_config.tf_model_config
+    patch_size = tuple(transformer_config.get("patch_size", (1, 2, 2)))
+    if len(patch_size) != 3:
+        raise ValueError(f"PipeFusion transformer patch_size must have three dimensions, got {patch_size!r}")
+
+    # PipeFusion is currently implemented by the Wan family. Keep these
+    # defaults aligned with Wan's VAE, while allowing model_config overrides.
+    vae_temporal = int(od_config.model_config.get("vae_scale_factor_temporal", 4))
+    vae_spatial = int(od_config.model_config.get("vae_scale_factor_spatial", 8))
+    height = height // (vae_spatial * patch_size[1]) * (vae_spatial * patch_size[1])
+    width = width // (vae_spatial * patch_size[2]) * (vae_spatial * patch_size[2])
+    num_frames = num_frames // vae_temporal * vae_temporal + 1 if num_frames % vae_temporal != 1 else num_frames
+    latent_shape = (
+        (num_frames - 1) // vae_temporal + 1,
+        height // vae_spatial,
+        width // vae_spatial,
+    )
+    token_capacity = get_pipefusion_token_capacity(latent_shape, patch_size)
+    if token_capacity > PIPEFUSION_KV_MAX_TOKENS:
+        raise ValueError(
+            f"PipeFusion request {request.request_id!r} requires {token_capacity} KV tokens per row, "
+            f"exceeding the built-in limit of {PIPEFUSION_KV_MAX_TOKENS}"
+        )
+
+    # Wan materializes an unconditional embedding for its default guidance
+    # even when the caller omits negative_prompt. Every Worker receives the
+    # same metadata, including CFG-parallel ranks, so install both identities.
+    cfg_branches: tuple[PipeFusionBranchKey, ...] = ("inputs", "inputs_uncond")
+    num_layers = int(transformer_config.get("num_layers", 40))
+    num_heads = int(transformer_config.get("num_attention_heads", 40))
+    head_dim = int(transformer_config.get("attention_head_dim", 128))
+    pp_size = max(1, int(getattr(parallel_config, "pipeline_parallel_size", 1)))
+    tp_size = max(1, int(getattr(parallel_config, "tensor_parallel_size", 1)))
+    local_layers = (num_layers + pp_size - 1) // pp_size
+    local_heads = (num_heads + tp_size - 1) // tp_size
+    estimated_bytes_per_row = (
+        token_capacity
+        * 2
+        * local_layers
+        * local_heads
+        * head_dim
+        * torch.empty((), dtype=od_config.dtype).element_size()
+    )
+    # Multiple outputs are carried in the dense tensor's batch dimension; they
+    # share one logical sequence row and remain isolated within that tensor.
+    required_rows = len(cfg_branches)
+    max_rows = getattr(od_config, "diffusion_kv_max_rows_per_request", None) or 2
+    if required_rows > max_rows:
+        raise ValueError(
+            f"PipeFusion request {request.request_id!r} requires {required_rows} managed KV rows, "
+            f"exceeding diffusion_kv_max_rows_per_request={max_rows}"
+        )
+    request.diffusion_kv_requests = build_pipefusion_kv_requests(
+        request.request_id,
+        token_capacity=token_capacity,
+        sequence_count=1,
+        cfg_branches=cfg_branches,
+        estimated_bytes_per_row=estimated_bytes_per_row,
+    )
 
 
 class PipeFusionRuntime:
@@ -49,6 +191,9 @@ class PipeFusionRuntime:
         self.patch_idx_tensor = torch.tensor(0, dtype=torch.int32)
         self.warmup_cache_timestep: torch.Tensor | None = None
         self.update_warmup_cache = True
+        self._kv_offload_manager: PipeFusionKVOffloadManager | None = None
+        self._kv_layer_order: list[str] = []
+        self._kv_row_binding_resolver: Callable[[str, int, str], Any] | None = None
 
     @property
     def cache_identity(self) -> PipeFusionCacheIdentity:
@@ -75,6 +220,53 @@ class PipeFusionRuntime:
             raise ValueError(f"Invalid PipeFusion cache key: {key!r}. Must be 'inputs' or 'inputs_uncond'.")
         self.cache_key = key
 
+    def get_kv_offload_manager(self) -> PipeFusionKVOffloadManager:
+        if self._kv_offload_manager is None:
+            from vllm_omni.diffusion.distributed.pipefusion.offload import PipeFusionKVOffloadManager
+
+            self._kv_offload_manager = PipeFusionKVOffloadManager.from_env()
+        return self._kv_offload_manager
+
+    def register_kv_layer(self, layer_id: str) -> None:
+        if layer_id not in self._kv_layer_order:
+            self._kv_layer_order.append(layer_id)
+
+    def set_kv_row_binding_resolver(
+        self,
+        resolver: Callable[[str, int, str], Any] | None,
+    ) -> None:
+        self._kv_row_binding_resolver = resolver
+
+    def validate_kv_row_binding(self, observed_seq_len: int | None = None) -> None:
+        """Validate the installed logical row against the runtime token shape."""
+
+        if self._kv_row_binding_resolver is None:
+            return
+        if self.request_id is None or self.sequence_id is None:
+            raise RuntimeError("Managed PipeFusion KV requires an active request/sequence identity")
+        binding = self._kv_row_binding_resolver(
+            self.request_id,
+            self.sequence_id,
+            self.cache_key,
+        )
+        token_capacity = self.ppf * self.pph * self.ppw
+        required_capacity = max(token_capacity, observed_seq_len or 0)
+        if binding.max_seq_len < required_capacity:
+            raise RuntimeError(
+                f"Installed PipeFusion KV row {binding.row_index} has capacity {binding.max_seq_len}, "
+                f"but runtime requires {required_capacity} tokens"
+            )
+
+    def prefetch_following_layers(self, identity: PipeFusionCacheIdentity, layer_id: str) -> None:
+        manager = self.get_kv_offload_manager()
+        if not manager.enabled or manager.prefetch_layers == 0 or layer_id not in self._kv_layer_order:
+            return
+        layer_index = self._kv_layer_order.index(layer_id)
+        for next_layer in self._kv_layer_order[layer_index + 1 : layer_index + 1 + manager.prefetch_layers]:
+            cache_identity = (*identity, next_layer)
+            if manager.contains(cache_identity):
+                manager.prefetch(cache_identity)
+
     def set_run_config(self, warmup_steps: int | None = None, split_dim: str | None = None) -> None:
         if warmup_steps is not None:
             if not isinstance(warmup_steps, int) or warmup_steps < 1:
@@ -83,7 +275,7 @@ class PipeFusionRuntime:
         if split_dim is not None:
             if split_dim not in ("height", "temporal"):
                 raise ValueError(f"Invalid PipeFusion split_dim: {split_dim!r}. Must be 'height' or 'temporal'.")
-            self.split_dim = split_dim
+            self.split_dim = cast(Literal["height", "temporal"], split_dim)
 
     def set_patched_mode(self, patch_mode: bool):
         self.patch_mode = patch_mode

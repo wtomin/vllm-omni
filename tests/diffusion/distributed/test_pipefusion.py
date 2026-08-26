@@ -13,16 +13,33 @@ import pytest
 import torch
 from torch.nn import functional as F
 
+import vllm_omni.diffusion.distributed.pipefusion.offload as pf_offload
 import vllm_omni.diffusion.distributed.pipefusion.pipefusion as pf_pipeline
 import vllm_omni.diffusion.distributed.pipefusion.pipefusion_conv as pf_conv
 import vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime as pf_runtime
 import vllm_omni.diffusion.distributed.pipefusion.pipefusion_scheduler as pf_scheduler
 import vllm_omni.diffusion.distributed.pipefusion.pipefusion_transformer as pf_transformer
 from vllm_omni.diffusion.data import DiffusionParallelConfig
+from vllm_omni.diffusion.diffusion_kv.manager import DiffusionKVCacheManager
+from vllm_omni.diffusion.diffusion_kv.metadata import DiffusionKVMetadata, DiffusionKVSequenceMetadata
+from vllm_omni.diffusion.diffusion_kv.model_runner_backend import DiffusionKVModelRunnerBackend
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
+from vllm_omni.diffusion.distributed.pipefusion.dense_kv_store import (
+    PipeFusionDenseKVStore,
+    PipeFusionPatchLayout,
+)
+from vllm_omni.diffusion.distributed.pipefusion.offload import (
+    PipeFusionKVOffloadManager,
+    PipeFusionKVResidency,
+)
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion import PipeFusionPipelineMixin
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion_conv import PipeFusionConvMixin
-from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import PipeFusionRuntime
+from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
+    PipeFusionRuntime,
+    attach_pipefusion_kv_requests,
+    build_pipefusion_kv_requests,
+    get_pipefusion_token_capacity,
+)
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion_scheduler import PipeFusionSchedulerMixin
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion_transformer import (
     PipeFusionRotaryEmbeddingMixin,
@@ -31,7 +48,7 @@ from vllm_omni.diffusion.distributed.pipefusion.pipefusion_transformer import (
 )
 from vllm_omni.diffusion.distributed.pipeline_parallel import PipelineParallelMixin
 
-pytestmark = [pytest.mark.parallel, pytest.mark.cpu]
+pytestmark = [pytest.mark.core_model, pytest.mark.parallel, pytest.mark.cpu]
 
 
 class FakePPGroup:
@@ -58,6 +75,54 @@ def _set_patch_idx(runtime: PipeFusionRuntime, patch_idx: int) -> None:
 
 
 class TestPipeFusionRuntime:
+    def test_build_managed_kv_rows_uses_contiguous_branch_rows(self):
+        assert get_pipefusion_token_capacity((5, 8, 6), (1, 2, 2)) == 60
+
+        requests = build_pipefusion_kv_requests(
+            "req-a",
+            token_capacity=60,
+            sequence_count=2,
+            cfg_branches=("inputs", "inputs_uncond"),
+        )
+
+        assert [request.sequence_id for request in requests] == [0, 1, 2, 3]
+        assert [(request.request_id, request.logical_sequence_id, request.cache_branch) for request in requests] == [
+            ("req-a:pf:0:inputs", 0, "inputs"),
+            ("req-a:pf:0:inputs_uncond", 0, "inputs_uncond"),
+            ("req-a:pf:1:inputs", 1, "inputs"),
+            ("req-a:pf:1:inputs_uncond", 1, "inputs_uncond"),
+        ]
+
+    def test_default_local_cfg_reserves_unconditional_row_without_negative_prompt(self):
+        request = SimpleNamespace(
+            request_id="req-a",
+            prompt={"prompt": "a cat"},
+            sampling_params=SimpleNamespace(height=64, width=64, num_frames=5),
+            diffusion_kv_requests=(),
+        )
+        od_config = SimpleNamespace(
+            dtype=torch.bfloat16,
+            model_config={"vae_scale_factor_temporal": 4, "vae_scale_factor_spatial": 8},
+            tf_model_config={
+                "patch_size": (1, 2, 2),
+                "num_layers": 2,
+                "num_attention_heads": 2,
+                "attention_head_dim": 4,
+            },
+            diffusion_kv_max_rows_per_request=2,
+            parallel_config=SimpleNamespace(
+                enable_pipefusion=True,
+                cfg_parallel_size=1,
+                pipeline_parallel_size=1,
+                tensor_parallel_size=1,
+            ),
+        )
+
+        attach_pipefusion_kv_requests(request, od_config)
+
+        assert [row.cache_branch for row in request.diffusion_kv_requests] == ["inputs", "inputs_uncond"]
+        assert all(row.estimated_bytes > 0 for row in request.diffusion_kv_requests)
+
     def test_set_run_config_validates_warmup_steps(self):
         runtime = PipeFusionRuntime()
 
@@ -103,6 +168,36 @@ class TestPipeFusionRuntime:
 
         with pytest.raises(ValueError, match="sequence_id must be a non-negative integer"):
             runtime.set_request_context("req-a", -1)
+
+    def test_managed_row_binding_validates_runtime_capacity(self):
+        runtime = PipeFusionRuntime()
+        runtime.set_request_context("req-a", 0)
+        runtime.ppf, runtime.pph, runtime.ppw = 2, 3, 4
+        runtime.set_kv_row_binding_resolver(
+            lambda request_id, sequence_id, branch: SimpleNamespace(
+                row_index=7,
+                max_seq_len=24,
+            )
+        )
+        runtime.validate_kv_row_binding()
+
+        runtime.set_kv_row_binding_resolver(
+            lambda request_id, sequence_id, branch: SimpleNamespace(
+                row_index=7,
+                max_seq_len=23,
+            )
+        )
+        with pytest.raises(RuntimeError, match="runtime requires 24 tokens"):
+            runtime.validate_kv_row_binding()
+        with pytest.raises(RuntimeError, match="runtime requires 25 tokens"):
+            runtime.validate_kv_row_binding(observed_seq_len=25)
+
+        def missing_binding(request_id, sequence_id, branch):
+            raise KeyError((request_id, sequence_id, branch))
+
+        runtime.set_kv_row_binding_resolver(missing_binding)
+        with pytest.raises(KeyError):
+            runtime.validate_kv_row_binding()
 
     def test_height_split_patch_metadata_and_recv_buffer_reset(self, monkeypatch):
         runtime = PipeFusionRuntime()
@@ -165,6 +260,216 @@ class TestPipeFusionRuntime:
         runtime.pipeline_patch_idx = 2
         runtime.next_patch()
         assert runtime.pipeline_patch_idx == 0
+
+
+class TestPipeFusionDenseKVStore:
+    def test_cpu_offload_state_and_byte_accounting(self):
+        manager = PipeFusionKVOffloadManager(enabled=True, pin_memory=False)
+        identity = ("req-a", 0, "inputs", "blocks.0.attn1")
+        key = torch.arange(4, dtype=torch.float32)
+        value = key + 10
+
+        manager.put(identity, key, value)
+        assert manager.residency(identity) is PipeFusionKVResidency.GPU
+        assert manager.gpu_bytes == 32
+
+        assert manager.offload(identity) is True
+        assert manager.residency(identity) is PipeFusionKVResidency.CPU
+        assert manager.gpu_bytes == 0
+        assert manager.cpu_bytes == 32
+
+        restored_key, restored_value = manager.get(identity)
+        assert manager.residency(identity) is PipeFusionKVResidency.GPU
+        torch.testing.assert_close(restored_key, key)
+        torch.testing.assert_close(restored_value, value)
+
+    def test_cpu_offload_budget_is_enforced_before_copy(self, monkeypatch):
+        monkeypatch.setattr(pf_offload, "PIPEFUSION_KV_MAX_CPU_BYTES", 31)
+        manager = PipeFusionKVOffloadManager(enabled=True, pin_memory=False)
+        identity = ("req-a", 0, "inputs", "blocks.0.attn1")
+        manager.put(identity, torch.ones(4), torch.ones(4))
+
+        with pytest.raises(RuntimeError, match="CPU offload budget exceeded"):
+            manager.offload(identity)
+
+        assert manager.residency(identity) is PipeFusionKVResidency.GPU
+
+    def test_interleaved_requests_keep_patch_updates_isolated_with_offload(self):
+        manager = PipeFusionKVOffloadManager(enabled=True, pin_memory=False)
+        store = PipeFusionDenseKVStore(manager)
+        layout = PipeFusionPatchLayout(
+            split_dim="temporal",
+            ppf=2,
+            pph=1,
+            ppw=1,
+            num_pipeline_patch=2,
+        )
+        layer_id = "blocks.0.attn1"
+        req_a = ("req-a", 0, "inputs")
+        req_b = ("req-b", 0, "inputs")
+        store.put_full(req_a, layer_id, torch.tensor([[[[1.0]], [[2.0]]]]), torch.tensor([[[[11.0]], [[12.0]]]]))
+        store.put_full(req_b, layer_id, torch.tensor([[[[3.0]], [[4.0]]]]), torch.tensor([[[[13.0]], [[14.0]]]]))
+        assert store.offload(req_a, layer_id)
+        assert store.offload(req_b, layer_id)
+
+        key_a, value_a = store.update_patch(
+            req_a,
+            layer_id,
+            0,
+            torch.tensor([[[[100.0]]]]),
+            torch.tensor([[[[110.0]]]]),
+            layout=layout,
+        )
+        key_b, value_b = store.update_patch(
+            req_b,
+            layer_id,
+            1,
+            torch.tensor([[[[200.0]]]]),
+            torch.tensor([[[[210.0]]]]),
+            layout=layout,
+        )
+
+        torch.testing.assert_close(key_a.flatten(), torch.tensor([100.0, 2.0]))
+        torch.testing.assert_close(value_a.flatten(), torch.tensor([110.0, 12.0]))
+        torch.testing.assert_close(key_b.flatten(), torch.tensor([3.0, 200.0]))
+        torch.testing.assert_close(value_b.flatten(), torch.tensor([13.0, 210.0]))
+
+    def test_prefetch_window_restores_following_layer(self):
+        manager = PipeFusionKVOffloadManager(enabled=True, pin_memory=False, prefetch_layers=1)
+        runtime = PipeFusionRuntime()
+        runtime._kv_offload_manager = manager
+        runtime.register_kv_layer("blocks.0.attn1")
+        runtime.register_kv_layer("blocks.1.attn1")
+        next_identity = ("req-a", 0, "inputs", "blocks.1.attn1")
+        manager.put(next_identity, torch.ones(1), torch.ones(1))
+        manager.offload(next_identity)
+
+        runtime.prefetch_following_layers(("req-a", 0, "inputs"), "blocks.0.attn1")
+
+        assert manager.residency(next_identity) is PipeFusionKVResidency.GPU
+
+
+class TestPipeFusionManagedRows:
+    def test_logical_manager_reserves_and_releases_rows(self):
+        manager = DiffusionKVCacheManager(
+            None,
+            max_model_len=64,
+            scheduler_block_size=1,
+            hash_block_size=1,
+            max_logical_rows=2,
+        )
+        requests = build_pipefusion_kv_requests(
+            "req-a",
+            token_capacity=32,
+            cfg_branches=("inputs", "inputs_uncond"),
+        )
+
+        metadata = manager.reserve_request("req-a", requests)
+        assert metadata is not None
+        assert [sequence.cache_branch for sequence in metadata.sequences] == ["inputs", "inputs_uncond"]
+        assert (
+            manager.reserve_request(
+                "req-b",
+                build_pipefusion_kv_requests("req-b", token_capacity=32),
+            )
+            is None
+        )
+
+        manager.free_request("req-a")
+        assert (
+            manager.reserve_request(
+                "req-b",
+                build_pipefusion_kv_requests("req-b", token_capacity=32),
+            )
+            is not None
+        )
+
+    def test_logical_manager_admits_and_releases_estimated_bytes(self):
+        manager = DiffusionKVCacheManager(
+            None,
+            max_model_len=64,
+            scheduler_block_size=1,
+            hash_block_size=1,
+            max_logical_rows=2,
+            max_logical_bytes=128,
+        )
+        request = build_pipefusion_kv_requests(
+            "req-a",
+            token_capacity=32,
+            estimated_bytes_per_row=96,
+        )
+        assert manager.reserve_request("req-a", request) is not None
+        assert (
+            manager.reserve_request(
+                "req-b",
+                build_pipefusion_kv_requests(
+                    "req-b",
+                    token_capacity=32,
+                    estimated_bytes_per_row=64,
+                ),
+            )
+            is None
+        )
+
+        manager.free_request("req-a")
+        assert (
+            manager.reserve_request(
+                "req-b",
+                build_pipefusion_kv_requests(
+                    "req-b",
+                    token_capacity=32,
+                    estimated_bytes_per_row=64,
+                ),
+            )
+            is not None
+        )
+
+    def test_worker_row_binding_isolated_by_cfg_branch(self):
+        od_config = SimpleNamespace(
+            parallel_config=SimpleNamespace(
+                enable_pipefusion=True,
+            ),
+            diffusion_kv_max_rows_per_request=2,
+            max_num_seqs=1,
+        )
+        backend = DiffusionKVModelRunnerBackend(
+            vllm_config=SimpleNamespace(),
+            od_config=od_config,
+            device=torch.device("cpu"),
+        )
+        metadata = DiffusionKVMetadata(
+            request_id="req-a",
+            allocation_generation=1,
+            sequences=(
+                DiffusionKVSequenceMetadata(
+                    sequence_id=0,
+                    logical_sequence_id=0,
+                    cache_branch="inputs",
+                    prefix_len=0,
+                    target_len=32,
+                    seq_len=32,
+                    block_ids=(),
+                ),
+                DiffusionKVSequenceMetadata(
+                    sequence_id=1,
+                    logical_sequence_id=0,
+                    cache_branch="inputs_uncond",
+                    prefix_len=0,
+                    target_len=32,
+                    seq_len=32,
+                    block_ids=(),
+                ),
+            ),
+        )
+
+        assert backend.install_diffusion_kv_metadata(metadata) is True
+        positive = backend.get_pipefusion_kv_row_binding("req-a", 0, "inputs")
+        negative = backend.get_pipefusion_kv_row_binding("req-a", 0, "inputs_uncond")
+        assert positive.row_index != negative.row_index
+        assert positive.max_seq_len == negative.max_seq_len == 32
+        assert backend.remove_diffusion_kv_requests(["req-a"]) == 2
+        with pytest.raises(KeyError):
+            backend.get_pipefusion_kv_row_binding("req-a", 0, "inputs")
 
 
 class DummyScheduler(PipeFusionSchedulerMixin):

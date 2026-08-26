@@ -30,8 +30,13 @@ from vllm_omni.diffusion.data import (
     DiffusionRequestAbortedError,
     OmniDiffusionConfig,
 )
-from vllm_omni.diffusion.diffusion_kv.config import DiffusionKVCacheMode, is_scheduler_paged_kv_mode
+from vllm_omni.diffusion.diffusion_kv.config import (
+    DiffusionKVCacheMode,
+    is_pipefusion_managed_kv,
+    is_scheduler_paged_kv_mode,
+)
 from vllm_omni.diffusion.diffusion_kv.initialization import initialize_diffusion_kv_control_plane
+from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import attach_pipefusion_kv_requests
 from vllm_omni.diffusion.executor.abstract import DiffusionExecutor
 from vllm_omni.diffusion.io_support import (
     get_dummy_run_num_frames,
@@ -711,8 +716,9 @@ class DiffusionEngine:
         """Clear terminal Worker rows while Scheduler owns the allocations."""
 
         od_config = getattr(self, "od_config", None)
-        if od_config is None or not is_scheduler_paged_kv_mode(
-            getattr(od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY)
+        if od_config is None or not (
+            is_scheduler_paged_kv_mode(getattr(od_config, "diffusion_kv_mode", DiffusionKVCacheMode.DENSE_LEGACY))
+            or is_pipefusion_managed_kv(od_config)
         ):
             return
         unique_request_ids = list(dict.fromkeys(request_ids))
@@ -840,6 +846,7 @@ class DiffusionEngine:
         pre_process_func = getattr(self, "pre_process_func", None)
         if pre_process_func is not None:
             request = pre_process_func(request)
+        attach_pipefusion_kv_requests(request, self.od_config)
         self._validate_diffusion_kv_profile_limits(request)
         return request
 
