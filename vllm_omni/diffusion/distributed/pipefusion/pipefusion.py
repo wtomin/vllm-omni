@@ -326,16 +326,31 @@ class PipeFusionPipelineMixin(ABC):
                     else self._pipefusion_last_stage_intermediate_tensors
                 ) if skip_recv else None
                 if not (skip_patch and is_pipeline_first_stage()):
-                    noise_pred = self.predict_noise_maybe_with_cfg(
-                        do_true_cfg=do_true_cfg,
-                        true_cfg_scale=scale,
-                        positive_kwargs=positive_kwargs,
-                        negative_kwargs=negative_kwargs,
-                        cfg_normalize=False,
-                        skip_sync=True,
-                        inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
-                        intermediate_tensors=cached_intermediate_tensors,
-                    )
+                    predict_with_easycache = getattr(self, "predict_noise_maybe_with_easycache", None)
+                    if callable(predict_with_easycache):
+                        noise_pred = predict_with_easycache(
+                            do_true_cfg=do_true_cfg,
+                            true_cfg_scale=scale,
+                            positive_kwargs=positive_kwargs,
+                            negative_kwargs=negative_kwargs,
+                            cfg_normalize=False,
+                            raw_input=patch_latents[pidx],
+                            step_idx=runtime.warmup_steps + i,
+                            skip_sync=True,
+                            inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
+                            intermediate_tensors=cached_intermediate_tensors,
+                        )
+                    else:
+                        noise_pred = self.predict_noise_maybe_with_cfg(
+                            do_true_cfg=do_true_cfg,
+                            true_cfg_scale=scale,
+                            positive_kwargs=positive_kwargs,
+                            negative_kwargs=negative_kwargs,
+                            cfg_normalize=False,
+                            skip_sync=True,
+                            inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
+                            intermediate_tensors=cached_intermediate_tensors,
+                        )
 
                 if rotation_active:
                     pidx = last_stage_patch_indices[ip]
