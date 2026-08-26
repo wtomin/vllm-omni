@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from types import SimpleNamespace
 
@@ -9,6 +9,7 @@ from PIL import Image
 from torch import nn
 
 from tests.diffusion.models.wan2_2.conftest import StubScheduler, StubTransformer, StubVAE, noop_progress_bar
+from vllm_omni.diffusion.models.wan2_2.easycache import WanEasyCacheState
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v import (
     Wan22I2VPipeline,
     get_wan22_i2v_post_process_func,
@@ -223,6 +224,122 @@ def test_i2v_diffuse_selects_stage_guidance_and_expands_timesteps() -> None:
         torch.ones_like(calls[0]["hidden_states"][:, :, 0]),
     )
     torch.testing.assert_close(result, torch.full_like(latents, 2.0))
+
+
+class _FixedRiskPredictor(nn.Module):
+    horizon = 2
+
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
+        return features.new_tensor([[0.01, 0.02]])
+
+
+def _make_easycache_state(num_steps: int = 5) -> WanEasyCacheState:
+    return WanEasyCacheState(
+        predictor=_FixedRiskPredictor(),
+        calibration_offsets=torch.zeros(2),
+        threshold=1.0,
+        warmup_steps=0,
+        num_steps=num_steps,
+    )
+
+
+def test_i2v_easycache_reuses_branch_caches_before_cfg_combine() -> None:
+    pipeline = _make_i2v_pipeline(expand_timesteps=True)
+    pipeline._easycache_state = _make_easycache_state()
+    pipeline._current_timestep = torch.tensor(900)
+    raw = torch.ones(1, 4, 1, 2, 2)
+    calls: list[str] = []
+
+    def fake_predict_noise(**kwargs):
+        branch = kwargs["branch"]
+        calls.append(branch)
+        residual = 2.0 if branch == "cond" else 0.5
+        return raw + residual
+
+    pipeline.predict_noise = fake_predict_noise  # type: ignore[method-assign]
+    positive_kwargs = {"current_model": pipeline.transformer, "branch": "cond"}
+    negative_kwargs = {"current_model": pipeline.transformer, "branch": "uncond"}
+
+    first = pipeline.predict_noise_maybe_with_easycache(
+        do_true_cfg=True,
+        true_cfg_scale=3.0,
+        positive_kwargs=positive_kwargs,
+        negative_kwargs=negative_kwargs,
+        cfg_normalize=False,
+        raw_input=raw,
+        step_idx=0,
+    )
+    torch.testing.assert_close(first, (raw + 0.5) + 3.0 * ((raw + 2.0) - (raw + 0.5)))
+
+    raw2 = torch.full_like(raw, 10.0)
+    second = pipeline.predict_noise_maybe_with_easycache(
+        do_true_cfg=True,
+        true_cfg_scale=3.0,
+        positive_kwargs=positive_kwargs,
+        negative_kwargs=negative_kwargs,
+        cfg_normalize=False,
+        raw_input=raw2,
+        step_idx=1,
+    )
+
+    torch.testing.assert_close(second, (raw2 + 0.5) + 3.0 * ((raw2 + 2.0) - (raw2 + 0.5)))
+    assert calls == ["cond", "uncond"]
+    assert pipeline._easycache_state.stats.skip_pairs == 1
+    assert pipeline._easycache_state.stats.skip_forwards == 2
+
+
+def test_i2v_easycache_separates_patch_and_transformer_state() -> None:
+    state = _make_easycache_state()
+    raw = torch.ones(1, 4, 1, 2, 2)
+    state.update_branch(key=("transformer", 0, "cond"), raw_input=raw, output=raw + 1)
+    state.update_branch(key=("transformer", 0, "uncond"), raw_input=raw, output=raw + 2)
+
+    assert state.should_skip_pair(
+        pair_key=("transformer", 0),
+        raw_input=raw + 1,
+        timestep_value=500.0,
+        step_idx=1,
+        do_true_cfg=True,
+    )
+    assert not state.should_skip_pair(
+        pair_key=("transformer", 1),
+        raw_input=raw + 1,
+        timestep_value=500.0,
+        step_idx=1,
+        do_true_cfg=True,
+    )
+    assert not state.should_skip_pair(
+        pair_key=("transformer_2", 0),
+        raw_input=raw + 1,
+        timestep_value=500.0,
+        step_idx=1,
+        do_true_cfg=True,
+    )
+
+
+def test_i2v_easycache_warmup_covers_pipefusion_warmup(monkeypatch) -> None:
+    pipeline = _make_i2v_pipeline(expand_timesteps=True)
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v.load_horizon_predictor",
+        lambda checkpoint_path, device, threshold_override: (_FixedRiskPredictor(), torch.zeros(2), 1.0, {}),
+    )
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v.is_pipefusion_initialized",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v.get_pipefusion_runtime",
+        lambda: SimpleNamespace(warmup_steps=5),
+    )
+    pipeline._safe_pipeline_parallel_world_size = lambda: 1  # type: ignore[method-assign]
+    pipeline._safe_cfg_parallel_world_size = lambda: 1  # type: ignore[method-assign]
+
+    pipeline._configure_easycache_for_request(
+        [SimpleNamespace(extra_args={"lazy_enabled": True, "lazy_ckpt": "ckpt", "lazy_warmup_steps": 2})],
+        num_steps=10,
+    )
+
+    assert pipeline._easycache_state.warmup_steps == 5
 
 
 def test_i2v_prepare_latents_builds_expand_condition_and_first_frame_mask() -> None:

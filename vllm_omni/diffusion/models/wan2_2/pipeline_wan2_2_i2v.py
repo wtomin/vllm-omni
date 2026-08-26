@@ -6,7 +6,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any, ClassVar, cast
 
 import numpy as np
@@ -21,7 +21,15 @@ from vllm.sequence import IntermediateTensors
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import DistributedAutoencoderKLWan
 from vllm_omni.diffusion.distributed.cfg_parallel import CFGParallelMixin
+from vllm_omni.diffusion.distributed.parallel_state import (
+    get_classifier_free_guidance_world_size,
+    get_pipeline_parallel_world_size,
+)
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion import PipeFusionPipelineMixin
+from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
+    get_pipefusion_runtime,
+    is_pipefusion_initialized,
+)
 from vllm_omni.diffusion.distributed.pipeline_parallel import AsyncLatents, PipelineParallelMixin
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.forward_context import DenoiseProgressMixin, set_forward_context_denoise_step_idx
@@ -32,6 +40,11 @@ from vllm_omni.diffusion.models.dmd2 import DMD2PipelineMixin
 from vllm_omni.diffusion.models.interface import SupportImageInput, SupportsComponentDiscovery
 from vllm_omni.diffusion.models.progress_bar import ProgressBarMixin, _is_rank_zero
 from vllm_omni.diffusion.models.utils import _load_json
+from vllm_omni.diffusion.models.wan2_2.easycache import (
+    WanEasyCacheConfig,
+    WanEasyCacheState,
+    load_horizon_predictor,
+)
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2 import (
     build_wan_scheduler,
     create_transformer_from_config,
@@ -344,6 +357,12 @@ class Wan22I2VPipeline(
         self._guidance_scale_2 = None
         self._num_timesteps = None
         self._current_timestep = None
+        self._easycache_config = WanEasyCacheConfig()
+        self._easycache_loaded_signature: tuple[object, ...] | None = None
+        self._easycache_predictor = None
+        self._easycache_calibration_offsets = None
+        self._easycache_threshold: float | None = None
+        self._easycache_state: WanEasyCacheState | None = None
 
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
@@ -364,6 +383,158 @@ class Wan22I2VPipeline(
     @property
     def current_timestep(self):
         return self._current_timestep
+
+    @staticmethod
+    def _truthy_extra_arg(value: object, *, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+        return bool(value)
+
+    @staticmethod
+    def _safe_pipeline_parallel_world_size() -> int:
+        try:
+            return int(get_pipeline_parallel_world_size())
+        except AssertionError:
+            return 1
+
+    @staticmethod
+    def _safe_cfg_parallel_world_size() -> int:
+        try:
+            return int(get_classifier_free_guidance_world_size())
+        except AssertionError:
+            return 1
+
+    @staticmethod
+    def _easycache_relevant_extra_args(sampling_params: Any) -> dict[str, Any]:
+        extra_args = getattr(sampling_params, "extra_args", None) or {}
+        if not isinstance(extra_args, Mapping):
+            raise TypeError("Wan2.2 I2V EasyCache expects sampling_params.extra_args to be a mapping.")
+        return {
+            "lazy_enabled": extra_args.get("lazy_enabled"),
+            "lazy_ckpt": extra_args.get("lazy_ckpt"),
+            "lazy_threshold": extra_args.get("lazy_threshold"),
+            "lazy_warmup_steps": extra_args.get("lazy_warmup_steps"),
+            "lazy_log_stats": extra_args.get("lazy_log_stats"),
+        }
+
+    def _resolve_easycache_config(self, sampling_params_list: list[Any]) -> WanEasyCacheConfig:
+        first_extra = self._easycache_relevant_extra_args(sampling_params_list[0])
+        for sampling_params in sampling_params_list[1:]:
+            if self._easycache_relevant_extra_args(sampling_params) != first_extra:
+                raise ValueError("Batched Wan2.2 I2V requests must use identical EasyCache extra_args.")
+
+        enabled = self._truthy_extra_arg(first_extra["lazy_enabled"])
+        if not enabled:
+            return WanEasyCacheConfig()
+
+        checkpoint_path = first_extra["lazy_ckpt"]
+        if not checkpoint_path:
+            raise ValueError("Wan2.2 I2V EasyCache requires extra_args['lazy_ckpt'] when lazy_enabled is true.")
+        if not isinstance(checkpoint_path, str):
+            raise TypeError("Wan2.2 I2V EasyCache lazy_ckpt must be a string path.")
+
+        threshold_override = first_extra["lazy_threshold"]
+        if threshold_override is not None:
+            threshold_override = float(threshold_override)
+            if not np.isfinite(threshold_override) or threshold_override <= 0:
+                raise ValueError("Wan2.2 I2V EasyCache lazy_threshold must be finite and positive.")
+
+        warmup_steps = 7 if first_extra["lazy_warmup_steps"] is None else int(first_extra["lazy_warmup_steps"])
+        if warmup_steps < 0:
+            raise ValueError("Wan2.2 I2V EasyCache lazy_warmup_steps must be non-negative.")
+
+        return WanEasyCacheConfig(
+            enabled=True,
+            checkpoint_path=checkpoint_path,
+            threshold_override=threshold_override,
+            warmup_steps=warmup_steps,
+            log_stats=self._truthy_extra_arg(first_extra["lazy_log_stats"]),
+        )
+
+    def _configure_easycache_for_request(self, sampling_params_list: list[Any], num_steps: int) -> None:
+        config = self._resolve_easycache_config(sampling_params_list)
+        self._easycache_config = config
+        self._easycache_state = None
+        if not config.enabled:
+            return
+
+        if self._safe_pipeline_parallel_world_size() > 1:
+            raise NotImplementedError(
+                "Wan2.2 I2V EasyCache currently supports pipeline_parallel_world_size == 1 only. "
+                "PP/PipeFusion multi-stage skip requires a shared SKIP/CALC control plane."
+            )
+        if self._safe_cfg_parallel_world_size() > 1:
+            raise NotImplementedError("Wan2.2 I2V EasyCache does not yet support CFG parallel.")
+
+        assert config.checkpoint_path is not None
+        if getattr(self, "_easycache_loaded_signature", None) != config.signature:
+            predictor, calibration_offsets, threshold, _ = load_horizon_predictor(
+                config.checkpoint_path,
+                self.device,
+                config.threshold_override,
+            )
+            self._easycache_predictor = predictor
+            self._easycache_calibration_offsets = calibration_offsets
+            self._easycache_threshold = threshold
+            self._easycache_loaded_signature = config.signature
+
+        assert self._easycache_predictor is not None
+        assert self._easycache_calibration_offsets is not None
+        assert self._easycache_threshold is not None
+        effective_warmup_steps = config.warmup_steps
+        if is_pipefusion_initialized():
+            effective_warmup_steps = max(effective_warmup_steps, get_pipefusion_runtime().warmup_steps)
+        self._easycache_state = WanEasyCacheState(
+            predictor=self._easycache_predictor,
+            calibration_offsets=self._easycache_calibration_offsets,
+            threshold=self._easycache_threshold,
+            warmup_steps=effective_warmup_steps,
+            num_steps=num_steps,
+        )
+
+    @staticmethod
+    def _easycache_timestep_value(t: torch.Tensor) -> float:
+        return float(t.flatten()[0].item()) if torch.is_tensor(t) else float(t)
+
+    def _easycache_transformer_id(self, positive_kwargs: dict[str, Any]) -> str:
+        current_model = positive_kwargs.get("current_model")
+        if current_model is not None and current_model is self.transformer_2:
+            return "transformer_2"
+        return "transformer"
+
+    @staticmethod
+    def _easycache_patch_id() -> int:
+        if is_pipefusion_initialized():
+            runtime = get_pipefusion_runtime()
+            if runtime.patch_mode:
+                return int(runtime.pipeline_patch_idx)
+        return 0
+
+    def _log_easycache_stats(self) -> None:
+        state = getattr(self, "_easycache_state", None)
+        config = getattr(self, "_easycache_config", WanEasyCacheConfig())
+        if state is None or not config.log_stats:
+            return
+        stats = state.stats
+        total_pairs = stats.calc_pairs + stats.skip_pairs
+        logger.info(
+            "Wan2.2 I2V EasyCache statistics: calc_pairs=%d, skip_pairs=%d, skip_ratio=%.2f%%, "
+            "predictions=%d, plans=%d, zero_prefix=%d, prefix_histogram=%s, "
+            "calc_forwards=%d, skip_forwards=%d",
+            stats.calc_pairs,
+            stats.skip_pairs,
+            100.0 * stats.skip_pairs / max(total_pairs, 1),
+            stats.prediction_count,
+            stats.plan_count,
+            stats.zero_prefix_count,
+            stats.prefix_histogram,
+            stats.calc_forwards,
+            stats.skip_forwards,
+        )
 
     def diffuse(
         self,
@@ -416,12 +587,14 @@ class Wan22I2VPipeline(
                 )
 
                 # Predict noise with automatic CFG parallel handling
-                noise_pred = self.predict_noise_maybe_with_cfg(
+                noise_pred = self.predict_noise_maybe_with_easycache(
                     do_true_cfg=do_true_cfg,
                     true_cfg_scale=current_guidance_scale,
                     positive_kwargs=positive_kwargs,
                     negative_kwargs=negative_kwargs,
                     cfg_normalize=False,
+                    raw_input=latents,
+                    step_idx=step_idx,
                 )
 
                 # Compute the previous noisy sample x_t -> x_t-1 with automatic CFG sync
@@ -615,6 +788,7 @@ class Wan22I2VPipeline(
         self.scheduler.set_timesteps(num_steps, device=device)
         timesteps = self.scheduler.timesteps
         self._num_timesteps = len(timesteps)
+        self._configure_easycache_for_request(sampling_params_list, len(timesteps))
 
         boundary_timestep = None
         if boundary_ratio is not None:
@@ -697,6 +871,7 @@ class Wan22I2VPipeline(
             condition=condition,
             first_frame_mask=first_frame_mask,
         )
+        self._log_easycache_stats()
 
         # Wan2.2 is prone to out of memory errors when predicting large videos
         # so we empty the cache here to avoid OOM before vae decoding.
@@ -762,6 +937,109 @@ class Wan22I2VPipeline(
             req,
             num_outputs_per_prompt=num_outputs_per_prompt,
         )
+
+    def predict_noise_maybe_with_easycache(
+        self,
+        do_true_cfg: bool,
+        true_cfg_scale: float,
+        positive_kwargs: dict[str, Any],
+        negative_kwargs: dict[str, Any] | None,
+        cfg_normalize: bool = True,
+        output_slice: int | None = None,
+        raw_input: torch.Tensor | None = None,
+        step_idx: int | None = None,
+        skip_sync: bool = False,
+        inter_comm_ids: list[str] | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, ...] | None:
+        state = getattr(self, "_easycache_state", None)
+        if state is None:
+            return self.predict_noise_maybe_with_cfg(
+                do_true_cfg=do_true_cfg,
+                true_cfg_scale=true_cfg_scale,
+                positive_kwargs=positive_kwargs,
+                negative_kwargs=negative_kwargs,
+                cfg_normalize=cfg_normalize,
+                output_slice=output_slice,
+                skip_sync=skip_sync,
+                inter_comm_ids=inter_comm_ids,
+            )
+        if raw_input is None:
+            raise ValueError("Wan2.2 I2V EasyCache requires raw denoising latents for cache decisions.")
+        if do_true_cfg and negative_kwargs is None:
+            raise ValueError("Wan2.2 I2V EasyCache requires negative_kwargs when CFG is enabled.")
+
+        transformer_id = self._easycache_transformer_id(positive_kwargs)
+        patch_id = self._easycache_patch_id()
+        step_idx = 0 if step_idx is None else step_idx
+        pair_key = (transformer_id, patch_id)
+        timestep = self._current_timestep
+        timestep_value = 0.0 if timestep is None else self._easycache_timestep_value(timestep)
+        should_skip = state.should_skip_pair(
+            pair_key=pair_key,
+            raw_input=raw_input,
+            timestep_value=timestep_value,
+            step_idx=step_idx,
+            do_true_cfg=do_true_cfg,
+        )
+
+        if should_skip:
+            positive_noise_pred = state.get_cached_output(
+                key=(transformer_id, patch_id, "cond"),
+                raw_input=raw_input,
+            )
+            if do_true_cfg:
+                negative_noise_pred = state.get_cached_output(
+                    key=(transformer_id, patch_id, "uncond"),
+                    raw_input=raw_input,
+                )
+                if output_slice is not None:
+                    positive_noise_pred = positive_noise_pred[:, :output_slice]
+                    negative_noise_pred = negative_noise_pred[:, :output_slice]
+                return self.combine_cfg_noise(
+                    positive_noise_pred,
+                    negative_noise_pred,
+                    true_cfg_scale,
+                    cfg_normalize,
+                )
+            if output_slice is not None:
+                positive_noise_pred = positive_noise_pred[:, :output_slice]
+            return positive_noise_pred
+
+        positive_noise_pred = self.predict_noise(**positive_kwargs)
+        if isinstance(positive_noise_pred, IntermediateTensors):
+            raise NotImplementedError(
+                "Wan2.2 I2V EasyCache does not support pipeline-parallel intermediate tensors yet."
+            )
+        state.update_branch(
+            key=(transformer_id, patch_id, "cond"),
+            raw_input=raw_input,
+            output=positive_noise_pred,
+        )
+        if do_true_cfg:
+            assert negative_kwargs is not None
+            negative_noise_pred = self.predict_noise(**negative_kwargs)
+            if isinstance(negative_noise_pred, IntermediateTensors):
+                raise NotImplementedError(
+                    "Wan2.2 I2V EasyCache does not support pipeline-parallel intermediate tensors yet."
+                )
+            state.update_branch(
+                key=(transformer_id, patch_id, "uncond"),
+                raw_input=raw_input,
+                output=negative_noise_pred,
+            )
+            if output_slice is not None:
+                positive_noise_pred = positive_noise_pred[:, :output_slice]
+                negative_noise_pred = negative_noise_pred[:, :output_slice]
+            return self.combine_cfg_noise(
+                positive_noise_pred,
+                negative_noise_pred,
+                true_cfg_scale,
+                cfg_normalize,
+            )
+
+        if output_slice is not None:
+            positive_noise_pred = positive_noise_pred[:, :output_slice]
+        return positive_noise_pred
 
     def predict_noise(
         self,

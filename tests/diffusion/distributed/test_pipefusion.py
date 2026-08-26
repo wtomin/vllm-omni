@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """CPU unit tests for PipeFusion.
 
 These tests intentionally avoid real distributed process groups. GPU-backed
@@ -467,6 +467,68 @@ class TestPipeFusionPipelineMixin:
 
         assert runtime.warmup_steps == 4
         assert runtime.split_dim == "temporal"
+
+    def test_async_pipeline_prefers_easycache_predict_hook(self, monkeypatch):
+        runtime = PipeFusionRuntime()
+        runtime.num_pipeline_patch = 2
+        runtime.pp_patches_height = [2, 2]
+        runtime.latent_split_dim = -2
+        runtime.warmup_steps = 3
+        monkeypatch.setattr(pf_pipeline, "get_pipefusion_runtime", lambda: runtime)
+        monkeypatch.setattr(pf_pipeline, "is_pipeline_last_stage", lambda: True)
+        monkeypatch.setattr(pf_pipeline, "get_classifier_free_guidance_world_size", lambda: 1)
+
+        class _Scheduler:
+            def split_caches_for_patches(self, split_sizes, dim):
+                self.split_call = (split_sizes, dim)
+
+        class _Pipeline(PipeFusionPipelineMixin, PipelineParallelMixin, CFGParallelMixin):
+            def __init__(self):
+                self.scheduler = _Scheduler()
+                self._pipeline_kwargs = {}
+                self.calls = []
+
+            def _sync_pp_send(self):
+                return None
+
+            def prepare_model_kwargs(self, latents, timestep, **extra_kwargs):
+                del latents, timestep, extra_kwargs
+                return {}, None, False, 1.0
+
+            def predict_noise_maybe_with_easycache(self, **kwargs):
+                self.calls.append(
+                    {
+                        "raw_input": kwargs["raw_input"].clone(),
+                        "step_idx": kwargs["step_idx"],
+                    }
+                )
+                return torch.ones_like(kwargs["raw_input"])
+
+            def scheduler_step_maybe_with_cfg(self, noise_pred, t, latents, do_true_cfg, loopback_comm_id=None):
+                del t, do_true_cfg, loopback_comm_id
+                return latents + noise_pred
+
+        class _ProgressBar:
+            def __init__(self):
+                self.updates = 0
+
+            def update(self):
+                self.updates += 1
+
+        pipeline = _Pipeline()
+        latents = torch.zeros(1, 1, 1, 4, 1)
+        pbar = _ProgressBar()
+
+        result = pipeline._async_pipeline(torch.tensor([9]), latents, pbar)
+
+        torch.testing.assert_close(result, torch.ones_like(latents))
+        assert pipeline.scheduler.split_call == ([2, 2], -2)
+        assert [call["step_idx"] for call in pipeline.calls] == [3, 3]
+        assert [tuple(call["raw_input"].shape) for call in pipeline.calls] == [
+            (1, 1, 1, 2, 1),
+            (1, 1, 1, 2, 1),
+        ]
+        assert pbar.updates == 1
 
 
 class TestDiffusionParallelConfigPipeFusion:

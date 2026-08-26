@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project and the xDiT authors.
 #
 # This module is adapted from xDiT (https://github.com/xdit-project/xdit)
@@ -226,15 +227,29 @@ class PipeFusionPipelineMixin(ABC):
                 cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
                 n_branches = 1 if (cfg_parallel_ready or not do_true_cfg) else 2
 
-                noise_pred = self.predict_noise_maybe_with_cfg(
-                    do_true_cfg=do_true_cfg,
-                    true_cfg_scale=scale,
-                    positive_kwargs=positive_kwargs,
-                    negative_kwargs=negative_kwargs,
-                    cfg_normalize=False,
-                    skip_sync=True,
-                    inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
-                )
+                predict_with_easycache = getattr(self, "predict_noise_maybe_with_easycache", None)
+                if callable(predict_with_easycache):
+                    noise_pred = predict_with_easycache(
+                        do_true_cfg=do_true_cfg,
+                        true_cfg_scale=scale,
+                        positive_kwargs=positive_kwargs,
+                        negative_kwargs=negative_kwargs,
+                        cfg_normalize=False,
+                        raw_input=patch_latents[pidx],
+                        step_idx=runtime.warmup_steps + i,
+                        skip_sync=True,
+                        inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
+                    )
+                else:
+                    noise_pred = self.predict_noise_maybe_with_cfg(
+                        do_true_cfg=do_true_cfg,
+                        true_cfg_scale=scale,
+                        positive_kwargs=positive_kwargs,
+                        negative_kwargs=negative_kwargs,
+                        cfg_normalize=False,
+                        skip_sync=True,
+                        inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
+                    )
 
                 updated_latents = self.scheduler_step_maybe_with_cfg(
                     noise_pred,
