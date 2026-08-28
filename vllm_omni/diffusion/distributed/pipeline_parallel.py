@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from functools import wraps
 from typing import Any
@@ -304,7 +304,22 @@ class PipelineParallelMixin:
             latents = super().scheduler_step_maybe_with_cfg(
                 noise_pred, t, latents, do_true_cfg, per_request_scheduler, generator
             )
-            self._pp_send_work.extend(pp_group.isend_tensor_dict({"latents": latents}, dst=0, comm_id=loopback_comm_id))
+            if isinstance(latents, torch.Tensor):
+                handle = pp_group.isend_tensor(latents, dst=0)
+                if handle is not None:
+                    self._pp_send_work.append(handle)
+            else:
+                self._pp_send_work.extend(
+                    pp_group.isend_tensor_dict({"latents": latents}, dst=0, comm_id=loopback_comm_id)
+                )
         elif pp_group.is_first_rank:
-            latents = AsyncLatents(*pp_group.irecv_tensor_dict(src=pp_group.world_size - 1, comm_id=loopback_comm_id))
+            if isinstance(latents, torch.Tensor | AsyncLatents):
+                expected_latents = torch.as_tensor(latents)
+                recv_latents = torch.empty_like(expected_latents)
+                handle = pp_group.irecv_tensor(recv_latents, src=pp_group.world_size - 1)
+                latents = AsyncLatents({"latents": recv_latents}, [] if handle is None else [handle], [])
+            else:
+                latents = AsyncLatents(
+                    *pp_group.irecv_tensor_dict(src=pp_group.world_size - 1, comm_id=loopback_comm_id)
+                )
         return latents

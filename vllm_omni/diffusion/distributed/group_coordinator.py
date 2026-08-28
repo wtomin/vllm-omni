@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+
 # Copyright 2024 xDiT team.
 # Adapted from
 # https://github.com/vllm-project/vllm/blob/main/vllm/distributed/parallel_state.py
@@ -651,6 +654,31 @@ class GroupCoordinator:
         torch.distributed.recv(tensor, self.ranks[src], self.device_group)
         return tensor
 
+    def isend_tensor(self, tensor: torch.Tensor, dst: int | None = None) -> torch.distributed.Work | None:
+        """Non-blocking send for a single tensor with known shape on the receiver."""
+        if not torch.distributed.is_initialized() or self.world_size == 1 or tensor.numel() == 0:
+            return None
+        if dst is None:
+            dst = self.group_next_rank
+        assert dst < self.world_size, f"Invalid dst rank ({dst})"
+
+        group = self.cpu_group if tensor.is_cpu else self.device_group
+        handle = torch.distributed.isend(tensor, dst=self.ranks[dst], group=group)
+        if tensor.is_cuda:
+            tensor.record_stream(torch.cuda.current_stream(tensor.device))
+        return handle
+
+    def irecv_tensor(self, tensor: torch.Tensor, src: int | None = None) -> torch.distributed.Work | None:
+        """Non-blocking receive into a caller-provided tensor buffer."""
+        if not torch.distributed.is_initialized() or self.world_size == 1 or tensor.numel() == 0:
+            return None
+        if src is None:
+            src = self.group_prev_rank
+        assert src < self.world_size, f"Invalid src rank ({src})"
+
+        group = self.cpu_group if tensor.is_cpu else self.device_group
+        return torch.distributed.irecv(tensor, src=self.ranks[src], group=group)
+
     def destroy(self):
         if self.device_group is not None:
             torch.distributed.destroy_process_group(self.device_group)
@@ -773,6 +801,37 @@ class PipelineGroupCoordinator(GroupCoordinator):
         group = self.device_groups[(self.rank_in_group + 1) % 2] if self.world_size == 2 else self.device_group
         torch.distributed.recv(tensor, self.ranks[src], group)
         return tensor
+
+    def isend_tensor(self, tensor: torch.Tensor, dst: int | None = None) -> torch.distributed.Work | None:
+        """Non-blocking send for a single tensor with known shape on the receiver."""
+        if not torch.distributed.is_initialized() or self.world_size == 1 or tensor.numel() == 0:
+            return None
+        if dst is None:
+            dst = self.group_next_rank
+        assert dst < self.world_size, f"Invalid dst rank ({dst})"
+
+        if tensor.is_cpu:
+            group = self.cpu_groups[self.rank_in_group % 2] if self.world_size == 2 else self.cpu_group
+        else:
+            group = self.device_groups[self.rank_in_group % 2] if self.world_size == 2 else self.device_group
+        handle = torch.distributed.isend(tensor, dst=self.ranks[dst], group=group)
+        if tensor.is_cuda:
+            tensor.record_stream(torch.cuda.current_stream(tensor.device))
+        return handle
+
+    def irecv_tensor(self, tensor: torch.Tensor, src: int | None = None) -> torch.distributed.Work | None:
+        """Non-blocking receive into a caller-provided tensor buffer."""
+        if not torch.distributed.is_initialized() or self.world_size == 1 or tensor.numel() == 0:
+            return None
+        if src is None:
+            src = self.group_prev_rank
+        assert src < self.world_size, f"Invalid src rank ({src})"
+
+        if tensor.is_cpu:
+            group = self.cpu_groups[(self.rank_in_group + 1) % 2] if self.world_size == 2 else self.cpu_group
+        else:
+            group = self.device_groups[(self.rank_in_group + 1) % 2] if self.world_size == 2 else self.device_group
+        return torch.distributed.irecv(tensor, src=self.ranks[src], group=group)
 
     def reset_buffer(self):
         self.recv_tasks_queue = []

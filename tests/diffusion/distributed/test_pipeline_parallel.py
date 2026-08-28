@@ -261,6 +261,89 @@ class TestSyncPPSend:
         assert pipeline._pp_send_work == []
 
 
+class TestSchedulerLoopbackFastPath:
+    """Verifies scheduler loopback uses direct tensor P2P when shape is known."""
+
+    pytestmark = _UNIT_MARKS
+
+    @staticmethod
+    def _make_pipeline() -> PipelineParallelMixin:
+        class _SchedulerPP(PipelineParallelMixin, CFGParallelMixin):
+            def __init__(self):
+                self.scheduler = SimpleScheduler()
+
+        return _SchedulerPP()
+
+    @pytest.mark.parametrize("wrapped", [False, True], ids=["tensor", "async_latents"])
+    def test_first_rank_posts_direct_tensor_recv(self, monkeypatch, wrapped):
+        class _FirstRankGroup:
+            is_first_rank = True
+            is_last_rank = False
+            world_size = 2
+
+            def __init__(self):
+                self.recv_tensor = None
+                self.recv_src = None
+                self.work = FakeWork()
+
+            def irecv_tensor(self, tensor, src=None):
+                self.recv_tensor = tensor
+                self.recv_src = src
+                return self.work
+
+            def irecv_tensor_dict(self, *args, **kwargs):
+                raise AssertionError("loopback should not receive tensor-dict metadata for Tensor latents")
+
+        group = _FirstRankGroup()
+        monkeypatch.setattr(pp_module, "get_pipeline_parallel_world_size", lambda: 2)
+        monkeypatch.setattr(pp_module, "get_pp_group", lambda: group)
+
+        pipeline = self._make_pipeline()
+        expected_latents = torch.ones(2, 3)
+        input_latents = AsyncLatents({"latents": expected_latents}, [], []) if wrapped else expected_latents
+        output = pipeline.scheduler_step_maybe_with_cfg(None, torch.tensor(1), input_latents, False)
+
+        assert isinstance(output, AsyncLatents)
+        assert group.recv_src == 1
+        assert group.recv_tensor.shape == expected_latents.shape
+        assert group.recv_tensor.dtype == expected_latents.dtype
+        _ = output.shape
+        assert group.work.waited
+
+    def test_last_rank_sends_direct_tensor(self, monkeypatch):
+        class _LastRankGroup:
+            is_first_rank = False
+            is_last_rank = True
+
+            def __init__(self):
+                self.sent_tensor = None
+                self.sent_dst = None
+                self.work = FakeWork()
+
+            def isend_tensor(self, tensor, dst=None):
+                self.sent_tensor = tensor
+                self.sent_dst = dst
+                return self.work
+
+            def isend_tensor_dict(self, *args, **kwargs):
+                raise AssertionError("loopback should not send tensor-dict metadata for Tensor latents")
+
+        group = _LastRankGroup()
+        monkeypatch.setattr(pp_module, "get_pipeline_parallel_world_size", lambda: 2)
+        monkeypatch.setattr(pp_module, "get_pp_group", lambda: group)
+
+        pipeline = self._make_pipeline()
+        noise_pred = torch.ones(2, 3)
+        input_latents = torch.zeros(2, 3)
+        output = pipeline.scheduler_step_maybe_with_cfg(noise_pred, torch.tensor(1), input_latents, False)
+
+        expected = input_latents - 0.1 * noise_pred
+        torch.testing.assert_close(output, expected)
+        torch.testing.assert_close(group.sent_tensor, expected)
+        assert group.sent_dst == 0
+        assert pipeline._pp_send_work == [group.work]
+
+
 class TestDiffuseWrapper:
     """Verifies that PipelineParallelMixin flushes pending sends when diffuse() exits."""
 
@@ -1205,7 +1288,7 @@ def test_scheduler_step_labeled_loopback(
     loopback_comm_id,
     seed_pending_send,
 ):
-    """Loopback communication can reuse labeled metadata and flush pending sends."""
+    """Loopback communication can use direct tensor P2P and flush pending sends."""
     _run_scheduler_step(
         pp_size=pp_size,
         cfg_size=cfg_size,
