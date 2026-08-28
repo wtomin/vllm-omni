@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/" && pwd)"
 MODEL_ID="${MODEL_ID:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}"
 
 NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-low quality, blurry}"
-NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-40}"
+NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-3}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-5.0}"
 GUIDANCE_SCALE_HIGH="${GUIDANCE_SCALE_HIGH:-6.0}"
 BOUNDARY_RATIO="${BOUNDARY_RATIO:-0.875}"
@@ -35,6 +35,9 @@ Environment overrides:
   GPU_COUNT=4                  Default card count used to build CUDA_VISIBLE_DEVICES.
   CUDA_VISIBLE_DEVICES=0,1,2,3  Explicit device list.
   MODEL_ID=/path/to/model       Local model dir or HuggingFace repo id.
+  ENABLE_TORCH_PROFILER=0       Disable torch-profiler, which is enabled by default.
+  TORCH_PROFILER_DIR=./perf     Override the default per-run torch-profiler output dir.
+  TORCH_PROFILER_CONFIG='{}'    Override the full JSON passed to --profiler-config.
 EOF
 }
 
@@ -56,14 +59,10 @@ esac
 
 PROMPTS=(
   "${PROMPT_1:-Cherry blossoms swaying gently in the breeze, petals falling, smooth motion.}"
-  "${PROMPT_2:-A red sports car driving along a rainy neon city street at night, cinematic reflections.}"
-  "${PROMPT_3:-A golden retriever running through shallow ocean waves at sunset, joyful smooth motion.}"
 )
 
 SEEDS=(
   "${SEED_1:-42}"
-  "${SEED_2:-43}"
-  "${SEED_3:-44}"
 )
 
 cd "${REPO_ROOT}"
@@ -119,6 +118,10 @@ run_case() {
   local num_devices
   local -a env_args=()
   local -a parallel_args=()
+  local -a profiler_args=()
+  local torch_profiler_enabled="${ENABLE_TORCH_PROFILER:-1}"
+  local profiler_dir
+  local profiler_config
 
   num_devices="$(count_devices "${devices}")"
 
@@ -154,6 +157,22 @@ run_case() {
       ;;
   esac
 
+  if [[ "${torch_profiler_enabled}" == "1" ||
+        "${torch_profiler_enabled,,}" == "true" ||
+        "${torch_profiler_enabled,,}" == "yes" ]]; then
+    profiler_dir="${TORCH_PROFILER_DIR:-${log_file%.log}_torch_profiler}"
+    mkdir -p "${profiler_dir}"
+    if [[ -n "${TORCH_PROFILER_CONFIG:-}" ]]; then
+      profiler_config="${TORCH_PROFILER_CONFIG}"
+    else
+      profiler_config="$(cat <<EOF
+{"profiler":"torch","torch_profiler_dir":"${profiler_dir}","torch_profiler_use_gzip":true,"torch_profiler_record_shapes":true,"torch_profiler_with_stack":false,"torch_profiler_with_memory":false,"torch_profiler_with_flops":false,"torch_profiler_dump_cuda_time_total":true}
+EOF
+)"
+    fi
+    profiler_args=(--profiler-config "${profiler_config}")
+  fi
+
   {
     echo "Case: ${case_name}"
     echo "Resolution: ${width}x${height}"
@@ -162,6 +181,10 @@ run_case() {
     echo "Output: ${output}"
     echo "Seed: ${seed}"
     echo "Parallel args: ${parallel_args[*]:-<none>}"
+    echo "Torch profiler: ${torch_profiler_enabled}"
+    if [[ "${#profiler_args[@]}" -gt 0 ]]; then
+      echo "Torch profiler dir: ${profiler_dir:-from TORCH_PROFILER_CONFIG}"
+    fi
   } | tee "${log_file}"
 
   env "${env_args[@]}" CUDA_VISIBLE_DEVICES="${devices}" \
@@ -181,6 +204,7 @@ run_case() {
       --num-inference-steps "${NUM_INFERENCE_STEPS}" \
       --seed "${seed}" \
       --enable-diffusion-pipeline-profiler \
+      "${profiler_args[@]}" \
       --enable-cpu-offload \
       --vae-use-tiling \
       "${parallel_args[@]}" 2>&1 | tee -a "${log_file}"
@@ -197,9 +221,6 @@ mkdir -p "${OUTPUT_DIR}"
 
 CONFIGS=(
   "832 480 81"
-  "832 480 121"
-  "1280 704 81"
-  "1280 704 121"
 )
 
 for config in "${CONFIGS[@]}"; do
