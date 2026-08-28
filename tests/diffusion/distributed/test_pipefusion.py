@@ -612,6 +612,70 @@ class TestPipeFusionPipelineMixin:
         assert runtime.warmup_steps == 4
         assert runtime.split_dim == "temporal"
 
+    def test_sync_warmup_steps_add_stable_comm_ids(self, monkeypatch):
+        runtime = PipeFusionRuntime()
+        monkeypatch.setattr(pf_runtime, "_PF_RUNTIME", runtime)
+        monkeypatch.setattr(pf_pipeline, "get_classifier_free_guidance_world_size", lambda: 1)
+
+        class DummyPipeFusionPipeline(PipeFusionPipelineMixin, PipelineParallelMixin, CFGParallelMixin):
+            def __init__(self):
+                self.transformer_config = SimpleNamespace(patch_size=(1, 2, 2))
+                self.predict_inter_comm_ids = None
+                self.scheduler_loopback_comm_id = None
+
+            def prepare_model_kwargs(self, latents, timestep, **extra_kwargs):
+                return {}, None, False, 1.0
+
+            def predict_noise_maybe_with_cfg(
+                self,
+                do_true_cfg,
+                true_cfg_scale,
+                positive_kwargs,
+                negative_kwargs,
+                cfg_normalize=True,
+                output_slice=None,
+                skip_sync=False,
+                inter_comm_ids=None,
+            ):
+                self.predict_inter_comm_ids = inter_comm_ids
+                return torch.ones(1)
+
+            def scheduler_step_maybe_with_cfg(
+                self,
+                noise_pred,
+                t,
+                latents,
+                do_true_cfg,
+                per_request_scheduler=None,
+                generator=None,
+                loopback_comm_id=None,
+            ):
+                self.scheduler_loopback_comm_id = loopback_comm_id
+                return latents
+
+        pipeline = DummyPipeFusionPipeline()
+        pipeline._current_timestep = torch.tensor(1)
+        runtime.warmup_cache_timestep = torch.tensor(2)
+        runtime.patch_mode = False
+
+        pipeline.predict_noise_maybe_with_cfg(True, 7.5, {}, {})
+        assert pipeline.predict_inter_comm_ids == ["pf-sync-it", "pf-sync-it"]
+
+        pipeline.scheduler_step_maybe_with_cfg(torch.ones(1), torch.tensor(1), torch.ones(1), True)
+        assert pipeline.scheduler_loopback_comm_id == "pf-sync-lb"
+
+        pipeline.predict_noise_maybe_with_cfg(False, 7.5, {}, None, inter_comm_ids=["custom-it"])
+        assert pipeline.predict_inter_comm_ids == ["custom-it"]
+
+        pipeline.scheduler_step_maybe_with_cfg(
+            torch.ones(1),
+            torch.tensor(1),
+            torch.ones(1),
+            False,
+            loopback_comm_id="custom-lb",
+        )
+        assert pipeline.scheduler_loopback_comm_id == "custom-lb"
+
 
 class TestDiffusionParallelConfigPipeFusion:
     def test_pipefusion_disabled_by_default(self):

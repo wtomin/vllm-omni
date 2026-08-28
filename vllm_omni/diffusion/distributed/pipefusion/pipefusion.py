@@ -70,6 +70,12 @@ def _profile_range(pipeline: Any, name: str):
         yield
 
 
+def _pipefusion_sync_inter_comm_ids(do_true_cfg: bool) -> list[str]:
+    cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
+    n_branches = 1 if (cfg_parallel_ready or not do_true_cfg) else 2
+    return ["pf-sync-it"] * n_branches
+
+
 class PipeFusionPipelineMixin(ABC):
     """
     Mixin class providing PipeFusion (patch-wise + pipeline parallel) logic
@@ -190,16 +196,38 @@ class PipeFusionPipelineMixin(ABC):
 
             predict_noise_maybe_with_cfg = getattr(cls, "predict_noise_maybe_with_cfg", None)
             if callable(predict_noise_maybe_with_cfg):
+                predict_sig = inspect.signature(predict_noise_maybe_with_cfg)
 
                 @wraps(predict_noise_maybe_with_cfg)
                 def wrapped_predict_noise_maybe_with_cfg(self, *args: Any, **kwargs: Any) -> Any:
+                    bound = predict_sig.bind(self, *args, **kwargs)
+                    bound.apply_defaults()
+
                     # Update the KV cache only during the final warmup step
                     runtime.update_warmup_cache = not runtime.patch_mode and torch.equal(
                         self._current_timestep, runtime.warmup_cache_timestep
                     )
-                    return predict_noise_maybe_with_cfg(self, *args, **kwargs)
+                    if not runtime.patch_mode and bound.arguments["inter_comm_ids"] is None:
+                        bound.arguments["inter_comm_ids"] = _pipefusion_sync_inter_comm_ids(
+                            bound.arguments["do_true_cfg"]
+                        )
+                    return predict_noise_maybe_with_cfg(*bound.args, **bound.kwargs)
 
                 cls.predict_noise_maybe_with_cfg = wrapped_predict_noise_maybe_with_cfg
+
+            scheduler_step_maybe_with_cfg = getattr(cls, "scheduler_step_maybe_with_cfg", None)
+            if callable(scheduler_step_maybe_with_cfg):
+                scheduler_sig = inspect.signature(scheduler_step_maybe_with_cfg)
+
+                @wraps(scheduler_step_maybe_with_cfg)
+                def wrapped_scheduler_step_maybe_with_cfg(self, *args: Any, **kwargs: Any) -> Any:
+                    bound = scheduler_sig.bind(self, *args, **kwargs)
+                    bound.apply_defaults()
+                    if not runtime.patch_mode and bound.arguments["loopback_comm_id"] is None:
+                        bound.arguments["loopback_comm_id"] = "pf-sync-lb"
+                    return scheduler_step_maybe_with_cfg(*bound.args, **bound.kwargs)
+
+                cls.scheduler_step_maybe_with_cfg = wrapped_scheduler_step_maybe_with_cfg
 
     @staticmethod
     def _configure_pipefusion_run(req: "OmniDiffusionRequest") -> None:
@@ -286,6 +314,7 @@ class PipeFusionPipelineMixin(ABC):
 
                     cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
                     n_branches = 1 if (cfg_parallel_ready or not do_true_cfg) else 2
+                    inter_comm_ids = [f"pf-it-{pidx}"] * n_branches
 
                     noise_pred = self.predict_noise_maybe_with_cfg(
                         do_true_cfg=do_true_cfg,
@@ -294,7 +323,7 @@ class PipeFusionPipelineMixin(ABC):
                         negative_kwargs=negative_kwargs,
                         cfg_normalize=False,
                         skip_sync=True,
-                        inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
+                        inter_comm_ids=inter_comm_ids,
                     )
 
                     updated_latents = self.scheduler_step_maybe_with_cfg(
