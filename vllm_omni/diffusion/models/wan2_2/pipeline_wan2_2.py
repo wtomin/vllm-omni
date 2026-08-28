@@ -8,6 +8,7 @@ import logging
 import os
 import time
 from collections.abc import Iterable
+from contextlib import contextmanager
 from typing import Any, ClassVar, cast
 
 import PIL.Image
@@ -47,6 +48,28 @@ DEBUG_PERF = False
 WAN_SAMPLE_SOLVER_CHOICES = {"unipc", "euler"}
 FASTWAN_DMD_TIMESTEPS = (1000.0, 757.0, 522.0)
 FASTWAN_DMD_SCHEDULER_SHIFT = 8.0
+
+
+def _is_torch_profiler_configured(od_config: OmniDiffusionConfig) -> bool:
+    profiler_config = getattr(od_config, "profiler_config", None)
+    if profiler_config is None:
+        return False
+    if isinstance(profiler_config, dict):
+        return profiler_config.get("profiler") == "torch"
+    return getattr(profiler_config, "profiler", None) == "torch"
+
+
+@contextmanager
+def _profile_gpu_completion_range(od_config: OmniDiffusionConfig, name: str):
+    if not _is_torch_profiler_configured(od_config):
+        yield
+        return
+
+    with torch.profiler.record_function(name):
+        try:
+            yield
+        finally:
+            current_omni_platform.synchronize()
 
 
 def build_wan_scheduler(sample_solver: str, flow_shift: float) -> Any:
@@ -1026,16 +1049,21 @@ class Wan22Pipeline(
         ids, mask = text_inputs.input_ids, text_inputs.attention_mask
         seq_lens = mask.gt(0).sum(dim=1).long()
 
-        prompt_embeds = self.text_encoder(ids.to(device), mask.to(device)).last_hidden_state
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-        prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
-        prompt_embeds = torch.stack(
-            [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds], dim=0
-        )
+        with _profile_gpu_completion_range(
+            self.od_config,
+            "vllm_omni.wan22.encode_prompt.positive_prompt_embeds_gpu_complete",
+        ):
+            prompt_embeds = self.text_encoder(ids.to(device), mask.to(device)).last_hidden_state
+            prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+            prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
+            prompt_embeds = torch.stack(
+                [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds],
+                dim=0,
+            )
 
-        _, seq_len, _ = prompt_embeds.shape
-        prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-        prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+            _, seq_len, _ = prompt_embeds.shape
+            prompt_embeds = prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+            prompt_embeds = prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
 
         negative_prompt_embeds = None
         if do_classifier_free_guidance:
@@ -1052,18 +1080,22 @@ class Wan22Pipeline(
             )
             ids_neg, mask_neg = neg_text_inputs.input_ids, neg_text_inputs.attention_mask
             seq_lens_neg = mask_neg.gt(0).sum(dim=1).long()
-            negative_prompt_embeds = self.text_encoder(ids_neg.to(device), mask_neg.to(device)).last_hidden_state
-            negative_prompt_embeds = negative_prompt_embeds.to(dtype=dtype, device=device)
-            negative_prompt_embeds = [u[:v] for u, v in zip(negative_prompt_embeds, seq_lens_neg)]
-            negative_prompt_embeds = torch.stack(
-                [
-                    torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))])
-                    for u in negative_prompt_embeds
-                ],
-                dim=0,
-            )
-            negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_videos_per_prompt, 1)
-            negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
+            with _profile_gpu_completion_range(
+                self.od_config,
+                "vllm_omni.wan22.encode_prompt.negative_prompt_embeds_gpu_complete",
+            ):
+                negative_prompt_embeds = self.text_encoder(ids_neg.to(device), mask_neg.to(device)).last_hidden_state
+                negative_prompt_embeds = negative_prompt_embeds.to(dtype=dtype, device=device)
+                negative_prompt_embeds = [u[:v] for u, v in zip(negative_prompt_embeds, seq_lens_neg)]
+                negative_prompt_embeds = torch.stack(
+                    [
+                        torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))])
+                        for u in negative_prompt_embeds
+                    ],
+                    dim=0,
+                )
+                negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_videos_per_prompt, 1)
+                negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_videos_per_prompt, seq_len, -1)
 
         return prompt_embeds, negative_prompt_embeds
 

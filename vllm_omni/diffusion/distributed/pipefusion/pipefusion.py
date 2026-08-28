@@ -15,6 +15,7 @@ through predict_noise_maybe_with_cfg + scheduler_step_maybe_with_cfg.
 
 import inspect
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from functools import wraps
 from typing import TYPE_CHECKING, Any
 
@@ -30,9 +31,43 @@ from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
     is_pipefusion_initialized,
 )
 from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
+from vllm_omni.platforms import current_omni_platform
 
 if TYPE_CHECKING:
     from vllm_omni.diffusion.request import OmniDiffusionRequest
+
+
+def _is_torch_profiler_configured(pipeline: Any) -> bool:
+    od_config = getattr(pipeline, "od_config", None)
+    profiler_config = getattr(od_config, "profiler_config", None)
+    if profiler_config is None:
+        return False
+    if isinstance(profiler_config, dict):
+        return profiler_config.get("profiler") == "torch"
+    return getattr(profiler_config, "profiler", None) == "torch"
+
+
+@contextmanager
+def _profile_gpu_completion_range(pipeline: Any, name: str):
+    if not _is_torch_profiler_configured(pipeline):
+        yield
+        return
+
+    with torch.profiler.record_function(name):
+        try:
+            yield
+        finally:
+            current_omni_platform.synchronize()
+
+
+@contextmanager
+def _profile_range(pipeline: Any, name: str):
+    if not _is_torch_profiler_configured(pipeline):
+        yield
+        return
+
+    with torch.profiler.record_function(name):
+        yield
 
 
 class PipeFusionPipelineMixin(ABC):
@@ -121,13 +156,21 @@ class PipeFusionPipelineMixin(ABC):
                     async_timesteps = timesteps[warmup_steps:] if len(timesteps) > warmup_steps else None
                     runtime.warmup_cache_timestep = warmup_timesteps[-1]
 
-                    # Call standard diffuse for warmup steps
-                    bound.arguments["timesteps"] = warmup_timesteps
-                    latents = diffuse(*bound.args, **bound.kwargs)
+                    # Call standard diffuse for warmup steps.
+                    with _profile_gpu_completion_range(
+                        self,
+                        f"vllm_omni.pipefusion.sync_steps_gpu_complete.count_{len(warmup_timesteps)}",
+                    ):
+                        bound.arguments["timesteps"] = warmup_timesteps
+                        latents = diffuse(*bound.args, **bound.kwargs)
 
                     if async_timesteps is not None:
-                        with self.progress_bar(total=len(async_timesteps)) as pbar:
-                            latents = self._async_pipeline(timesteps=async_timesteps, latents=latents, pbar=pbar)
+                        with _profile_gpu_completion_range(
+                            self,
+                            f"vllm_omni.pipefusion.async_steps_gpu_complete.count_{len(async_timesteps)}",
+                        ):
+                            with self.progress_bar(total=len(async_timesteps)) as pbar:
+                                latents = self._async_pipeline(timesteps=async_timesteps, latents=latents, pbar=pbar)
 
                     return latents
 
@@ -227,39 +270,44 @@ class PipeFusionPipelineMixin(ABC):
         num_patch = runtime.num_pipeline_patch
         for i, t in enumerate(timesteps):
             self._current_timestep = t
-            set_forward_context_denoise_step_idx(runtime.warmup_steps + i)
+            global_step_idx = runtime.warmup_steps + i
+            set_forward_context_denoise_step_idx(global_step_idx)
 
             self._sync_pp_send()
 
             for pidx in range(num_patch):
-                positive_kwargs, negative_kwargs, do_true_cfg, scale = self.prepare_model_kwargs(
-                    patch_latents[pidx], t, **self._pipeline_kwargs
-                )
+                with _profile_range(
+                    self,
+                    f"vllm_omni.pipefusion.async_micro_step.step_{global_step_idx}.patch_{pidx}",
+                ):
+                    positive_kwargs, negative_kwargs, do_true_cfg, scale = self.prepare_model_kwargs(
+                        patch_latents[pidx], t, **self._pipeline_kwargs
+                    )
 
-                cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
-                n_branches = 1 if (cfg_parallel_ready or not do_true_cfg) else 2
+                    cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
+                    n_branches = 1 if (cfg_parallel_ready or not do_true_cfg) else 2
 
-                noise_pred = self.predict_noise_maybe_with_cfg(
-                    do_true_cfg=do_true_cfg,
-                    true_cfg_scale=scale,
-                    positive_kwargs=positive_kwargs,
-                    negative_kwargs=negative_kwargs,
-                    cfg_normalize=False,
-                    skip_sync=True,
-                    inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
-                )
+                    noise_pred = self.predict_noise_maybe_with_cfg(
+                        do_true_cfg=do_true_cfg,
+                        true_cfg_scale=scale,
+                        positive_kwargs=positive_kwargs,
+                        negative_kwargs=negative_kwargs,
+                        cfg_normalize=False,
+                        skip_sync=True,
+                        inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
+                    )
 
-                updated_latents = self.scheduler_step_maybe_with_cfg(
-                    noise_pred,
-                    t,
-                    patch_latents[pidx],
-                    do_true_cfg,
-                    loopback_comm_id=f"pf-lb-{pidx}",
-                )
-                if updated_latents is not None:
-                    patch_latents[pidx] = updated_latents
+                    updated_latents = self.scheduler_step_maybe_with_cfg(
+                        noise_pred,
+                        t,
+                        patch_latents[pidx],
+                        do_true_cfg,
+                        loopback_comm_id=f"pf-lb-{pidx}",
+                    )
+                    if updated_latents is not None:
+                        patch_latents[pidx] = updated_latents
 
-                runtime.next_patch()
+                    runtime.next_patch()
 
             pbar.update()
 
