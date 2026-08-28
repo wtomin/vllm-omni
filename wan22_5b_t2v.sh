@@ -11,7 +11,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/" && pwd)"
 MODEL_ID="${MODEL_ID:-Wan-AI/Wan2.2-TI2V-5B-Diffusers}"
 
 NEGATIVE_PROMPT="${NEGATIVE_PROMPT:-low quality, blurry}"
-NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-3}"
+NUM_INFERENCE_STEPS="${NUM_INFERENCE_STEPS:-4}"
 GUIDANCE_SCALE="${GUIDANCE_SCALE:-5.0}"
 GUIDANCE_SCALE_HIGH="${GUIDANCE_SCALE_HIGH:-6.0}"
 BOUNDARY_RATIO="${BOUNDARY_RATIO:-0.875}"
@@ -205,7 +205,6 @@ EOF
       --seed "${seed}" \
       --enable-diffusion-pipeline-profiler \
       "${profiler_args[@]}" \
-      --enable-cpu-offload \
       --vae-use-tiling \
       "${parallel_args[@]}" 2>&1 | tee -a "${log_file}"
 }
