@@ -41,6 +41,10 @@ from vllm_omni.diffusion.distributed.pipefusion.pipefusion_transformer import (
     PipeFusionSelfAttentionMixin,
     PipeFusionTransformerMixin,
 )
+from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
+    get_pipefusion_runtime,
+    is_pipefusion_initialized,
+)
 from vllm_omni.diffusion.distributed.sp_plan import (
     SequenceParallelInput,
     SequenceParallelOutput,
@@ -1033,6 +1037,7 @@ class WanTransformer3DModel(nn.Module, PipeFusionTransformerMixin):
     ) -> torch.Tensor | Transformer2DModelOutput | IntermediateTensors:
         # hidden_states is 5D on the first PP stage, 3D on others; dims always carries the original shape.
         batch_size, num_channels, num_frames, height, width = dims
+        p_t, p_h, p_w = self.config.patch_size
 
         if is_pipeline_first_stage():
             # Patch embedding and flatten to sequence. SP sharding happens at
@@ -1103,6 +1108,13 @@ class WanTransformer3DModel(nn.Module, PipeFusionTransformerMixin):
         # Transformer blocks
         # Preserve the post-patch (T, H, W) grid so VSA can partition
         # the flattened DiT sequence into spatiotemporal blocks.
+        if is_pipefusion_initialized() and get_pipefusion_runtime().patch_mode:
+            post_patch_num_frames = self.pipefusion_get_post_patch_num_frames(num_frames, p_t)
+            post_patch_height = self.pipefusion_get_post_patch_height(height, p_h)
+        else:
+            post_patch_num_frames = num_frames // p_t
+            post_patch_height = height // p_h
+        post_patch_width = width // p_w
         vsa_dit_seq_shape = (post_patch_num_frames, post_patch_height, post_patch_width)
         for block in self.blocks[self.start_layer : self.end_layer]:
             hidden_states = block(

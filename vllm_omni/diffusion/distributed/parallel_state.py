@@ -911,6 +911,7 @@ def initialize_model_parallel(
     pipeline_parallel_size: int = 1,
     enable_expert_parallel: bool = False,
     use_hsdp: bool = False,
+    enable_pipefusion: bool = False,
     backend: str | None = None,
 ) -> None:
     """Atomically initialize diffusion parallel groups.
@@ -946,6 +947,7 @@ def initialize_model_parallel(
             pipeline_parallel_size=pipeline_parallel_size,
             enable_expert_parallel=enable_expert_parallel,
             use_hsdp=use_hsdp,
+            enable_pipefusion=enable_pipefusion,
             backend=backend,
         )
     except BaseException:

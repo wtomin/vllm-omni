@@ -1057,16 +1057,21 @@ class DiffusionEngine:
         num_frames = get_dummy_run_num_frames(self.od_config.model_class_name, supports_audio_input)
         if num_frames <= 0:
             return None
+        parallel_config = getattr(self.od_config, "parallel_config", None)
+        enable_pipefusion = bool(getattr(parallel_config, "enable_pipefusion", False))
+        pipefusion_sync_steps = 1 if enable_pipefusion else None
+        num_inference_steps = pipefusion_sync_steps + 1 if pipefusion_sync_steps is not None else 1
         return OmniDiffusionRequest(
             prompt=prompt,
             request_id=DUMMY_DIFFUSION_REQUEST_ID,
             sampling_params=OmniDiffusionSamplingParams(
                 height=height,
                 width=width,
-                num_inference_steps=1,
+                num_inference_steps=num_inference_steps,
                 num_frames=num_frames,
                 guidance_scale=guidance_scale,
                 num_outputs_per_prompt=1,
+                pipefusion_warmup_steps=pipefusion_sync_steps,
                 extra_args={"cfg_text_scale": 1.0, "cfg_img_scale": 1.0},
             ),
         )
