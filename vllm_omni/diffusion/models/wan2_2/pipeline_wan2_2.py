@@ -912,6 +912,8 @@ class Wan22Pipeline(
             generator=generator,
         )
         self._log_easycache_stats()
+        self._release_pipefusion_denoise_caches()
+        self._release_easycache_request_state()
 
         # Wan2.2 is prone to out of memory errors when predicting large videos
         # so we empty the cache here to avoid OOM before vae decoding.
