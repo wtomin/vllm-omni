@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from functools import wraps
 from typing import Any
@@ -187,6 +187,7 @@ class PipelineParallelMixin:
         output_slice: int | None = None,
         skip_sync: bool = False,
         inter_comm_ids: list[str] | None = None,
+        return_uncombined: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, ...] | None:
         """
         Drop-in replacement for predict_noise_maybe_with_cfg that also handles PP.
@@ -202,8 +203,12 @@ class PipelineParallelMixin:
         Returns:
             noise_pred on the last PP rank (all CFG ranks when CFG-parallel is active).
             None on all other ranks.
+            When ``return_uncombined`` is true on the last rank, returns
+            ``(combined, positive, negative)`` so callers can cache CFG branches.
         """
         if get_pipeline_parallel_world_size() == 1:
+            if return_uncombined:
+                raise ValueError("return_uncombined is only supported with pipeline_parallel_size > 1")
             return super().predict_noise_maybe_with_cfg(
                 do_true_cfg, true_cfg_scale, positive_kwargs, negative_kwargs, cfg_normalize, output_slice
             )
@@ -259,7 +264,10 @@ class PipelineParallelMixin:
             if output_slice is not None:
                 local_pred = local_pred[:, :output_slice]
             gathered = get_cfg_group().all_gather(local_pred, separate_tensors=True)
-            return self.combine_cfg_noise(gathered[0], gathered[1], true_cfg_scale, cfg_normalize)
+            combined = self.combine_cfg_noise(gathered[0], gathered[1], true_cfg_scale, cfg_normalize)
+            if return_uncombined:
+                return combined, gathered[0], gathered[1]
+            return combined
 
         # Sequential CFG or no-CFG path.
         if do_true_cfg:
@@ -267,10 +275,15 @@ class PipelineParallelMixin:
             if output_slice is not None:
                 pos = pos[:, :output_slice]
                 neg = neg[:, :output_slice]
-            return self.combine_cfg_noise(pos, neg, true_cfg_scale, cfg_normalize)
+            combined = self.combine_cfg_noise(pos, neg, true_cfg_scale, cfg_normalize)
+            if return_uncombined:
+                return combined, pos, neg
+            return combined
         pred = noise_preds[0]
         if output_slice is not None:
             pred = pred[:, :output_slice]
+        if return_uncombined:
+            return pred, pred, None
         return pred
 
     def scheduler_step_maybe_with_cfg(

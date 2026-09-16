@@ -47,6 +47,7 @@ def _make_i2v_pipeline(*, expand_timesteps: bool) -> Wan22I2VPipeline:
     pipeline.vae_scale_factor_spatial = 8
     pipeline.expand_timesteps = expand_timesteps
     pipeline.progress_bar = noop_progress_bar
+    pipeline._init_easycache_state()
     return pipeline
 
 
@@ -325,15 +326,15 @@ def test_i2v_easycache_separates_patch_and_transformer_state() -> None:
 def test_i2v_easycache_warmup_covers_pipefusion_warmup(monkeypatch) -> None:
     pipeline = _make_i2v_pipeline(expand_timesteps=True)
     monkeypatch.setattr(
-        "vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v.load_horizon_predictor",
+        "vllm_omni.diffusion.models.wan2_2.easycache.load_horizon_predictor",
         lambda checkpoint_path, device, threshold_override: (_FixedRiskPredictor(), torch.zeros(2), 1.0, {}),
     )
     monkeypatch.setattr(
-        "vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v.is_pipefusion_initialized",
+        "vllm_omni.diffusion.models.wan2_2.easycache.is_pipefusion_initialized",
         lambda: True,
     )
     monkeypatch.setattr(
-        "vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v.get_pipefusion_runtime",
+        "vllm_omni.diffusion.models.wan2_2.easycache.get_pipefusion_runtime",
         lambda: SimpleNamespace(warmup_steps=5),
     )
     pipeline._safe_pipeline_parallel_world_size = lambda: 1  # type: ignore[method-assign]
