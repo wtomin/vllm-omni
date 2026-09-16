@@ -319,6 +319,21 @@ class PipeFusionPipelineMixin(ABC):
                 cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
                 n_branches = 1 if (cfg_parallel_ready or not do_true_cfg) else 2
 
+                if ip == 0:
+                    # Precompute EasyCache skip decisions for all patches in fixed patch
+                    # order and broadcast once per step. Required when Rotational
+                    # PipeFusion rotates the per-stage patch order; the per-pair
+                    # broadcast inside predict_noise_maybe_with_easycache would
+                    # otherwise misalign across PP ranks.
+                    plan_easycache_step = getattr(self, "plan_easycache_step", None)
+                    if callable(plan_easycache_step):
+                        plan_easycache_step(
+                            {idx: patch_latents[idx] for idx in range(num_patch)},
+                            step_idx=runtime.warmup_steps + i,
+                            do_true_cfg=do_true_cfg,
+                            transformer_id=self._easycache_transformer_id(positive_kwargs),
+                        )
+
                 noise_pred = None
                 cached_intermediate_tensors = (
                     self._pipefusion_warmup_intermediate_tensors

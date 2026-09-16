@@ -48,6 +48,7 @@ from vllm_omni.diffusion.models.wan2_2.chunked_mp4 import (
     resolve_wan_video_codec_options,
     wan_preencoded_mp4_payload,
 )
+from vllm_omni.diffusion.models.wan2_2.easycache import WanEasyCacheMixin
 from vllm_omni.diffusion.models.wan2_2.scheduling_wan_euler import WanEulerScheduler
 from vllm_omni.diffusion.models.wan2_2.wan2_2_transformer import WanSelfAttention, WanTransformer3DModel
 from vllm_omni.diffusion.offloader import OffloadPlan
@@ -364,6 +365,7 @@ _WAN_TEXT_ENCODER_OFFLOAD_PLAN = OffloadPlan(
 
 class Wan22Pipeline(
     nn.Module,
+    WanEasyCacheMixin,
     PipeFusionPipelineMixin,
     PipelineParallelMixin,
     CFGParallelMixin,
@@ -536,6 +538,7 @@ class Wan22Pipeline(
         self._guidance_scale_2 = None
         self._num_timesteps = None
         self._current_timestep = None
+        self._init_easycache_state()
 
         self.setup_diffusion_pipeline_profiler(
             enable_diffusion_pipeline_profiler=self.od_config.enable_diffusion_pipeline_profiler
@@ -611,12 +614,14 @@ class Wan22Pipeline(
                     latents, t, **self._pipeline_kwargs
                 )
 
-                noise_pred = self.predict_noise_maybe_with_cfg(
+                noise_pred = self.predict_noise_maybe_with_easycache(
                     do_true_cfg=do_true_cfg,
                     true_cfg_scale=current_guidance_scale,
                     positive_kwargs=positive_kwargs,
                     negative_kwargs=negative_kwargs,
                     cfg_normalize=False,
+                    raw_input=latents,
+                    step_idx=step_idx,
                 )
 
                 if self.is_dmd:
@@ -783,6 +788,7 @@ class Wan22Pipeline(
                 self.scheduler.set_timesteps(num_steps, device=device)
             timesteps = self.scheduler.timesteps
         self._num_timesteps = len(timesteps)
+        self._configure_easycache_for_request(sampling_params_list, len(timesteps))
         boundary_timestep = None
         if boundary_ratio is not None:
             boundary_timestep = boundary_ratio * self.scheduler.config.num_train_timesteps
@@ -905,6 +911,7 @@ class Wan22Pipeline(
             first_frame_mask=first_frame_mask,
             generator=generator,
         )
+        self._log_easycache_stats()
 
         # Wan2.2 is prone to out of memory errors when predicting large videos
         # so we empty the cache here to avoid OOM before vae decoding.
