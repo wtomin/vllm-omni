@@ -199,25 +199,27 @@ def load_horizon_predictor(
     return predictor, calibration_offsets, threshold, payload
 
 
-def tensor_l1_mean(tensor: torch.Tensor, other: torch.Tensor | None = None) -> float:
+def _tensor_l1_mean_scalar(tensor: torch.Tensor, other: torch.Tensor | None = None) -> torch.Tensor:
     if other is not None:
         if tensor.shape != other.shape:
             raise RuntimeError(f"EasyCache tensor shape mismatch: {tuple(tensor.shape)} != {tuple(other.shape)}")
         tensor = tensor - other
     if tensor.numel() == 0:
         raise RuntimeError("cannot compute a mean over an empty tensor")
-    return float(tensor.float().abs().mean().item())
+    return tensor.float().abs().mean()
+
+
+def tensor_l1_mean(tensor: torch.Tensor, other: torch.Tensor | None = None) -> float:
+    return float(_tensor_l1_mean_scalar(tensor, other).item())
 
 
 def longest_safe_prefix(cumulative_risk: torch.Tensor, threshold: float) -> int:
     if cumulative_risk.ndim != 1:
         raise ValueError("cumulative_risk must be one-dimensional")
-    prefix = 0
-    for risk in cumulative_risk:
-        if float(risk.item()) >= threshold:
-            break
-        prefix += 1
-    return prefix
+    # Preserve "stop at the first unsafe value" even for non-monotonic input,
+    # while reducing the device-to-host synchronization count to one.
+    safe_prefix_mask = torch.cumprod((cumulative_risk < threshold).to(torch.int32), dim=0)
+    return int(safe_prefix_mask.sum().item())
 
 
 class WanEasyCacheState:
@@ -268,7 +270,7 @@ class WanEasyCacheState:
         self,
         *,
         raw_input: torch.Tensor,
-        timestep_value: float,
+        timestep_value: float | torch.Tensor,
         step_idx: int,
         pair_key: EasyCachePairKey,
     ) -> torch.Tensor:
@@ -277,33 +279,62 @@ class WanEasyCacheState:
         assert cond.previous_raw_output is not None
         assert cond.cache is not None
 
-        input_change_curr = tensor_l1_mean(raw_input, cond.previous_raw_input)
-        input_norm_prev = tensor_l1_mean(cond.previous_raw_input)
-        input_change_curr_rel = input_change_curr / (input_norm_prev + 1e-8)
-
+        zero = torch.zeros((), dtype=torch.float32, device=raw_input.device)
+        timestep_scalar = (
+            timestep_value.flatten()[0].to(device=raw_input.device, dtype=torch.float32)
+            if torch.is_tensor(timestep_value)
+            else torch.tensor(timestep_value, dtype=torch.float32, device=raw_input.device)
+        )
         if cond.prev_prev_raw_input is None:
-            input_change_prev_rel = 0.0
+            input_change_prev_scalar = zero
+            input_norm_prev_prev_scalar = zero
         else:
-            input_change_prev = tensor_l1_mean(cond.previous_raw_input, cond.prev_prev_raw_input)
-            input_norm_prev_prev = tensor_l1_mean(cond.prev_prev_raw_input)
-            input_change_prev_rel = input_change_prev / (input_norm_prev_prev + 1e-8)
-
-        input_mean_curr = tensor_l1_mean(raw_input)
-        input_mean_prev = input_norm_prev
-
+            input_change_prev_scalar = _tensor_l1_mean_scalar(cond.previous_raw_input, cond.prev_prev_raw_input)
+            input_norm_prev_prev_scalar = _tensor_l1_mean_scalar(cond.prev_prev_raw_input)
         if cond.prev_prev_raw_output is None:
-            output_change_prev_rel = 0.0
+            output_change_prev_scalar = zero
+            output_norm_prev_prev_scalar = zero
         else:
-            output_change_prev = tensor_l1_mean(cond.previous_raw_output, cond.prev_prev_raw_output)
-            output_norm_prev_prev = tensor_l1_mean(cond.prev_prev_raw_output)
-            output_change_prev_rel = output_change_prev / (output_norm_prev_prev + 1e-8)
+            output_change_prev_scalar = _tensor_l1_mean_scalar(cond.previous_raw_output, cond.prev_prev_raw_output)
+            output_norm_prev_prev_scalar = _tensor_l1_mean_scalar(cond.prev_prev_raw_output)
 
-        cache_norm = tensor_l1_mean(cond.cache)
+        (
+            timestep_float,
+            input_change_curr,
+            input_norm_prev,
+            input_change_prev,
+            input_norm_prev_prev,
+            input_mean_curr,
+            output_change_prev,
+            output_norm_prev_prev,
+            cache_norm,
+        ) = torch.stack(
+            (
+                timestep_scalar,
+                _tensor_l1_mean_scalar(raw_input, cond.previous_raw_input),
+                _tensor_l1_mean_scalar(cond.previous_raw_input),
+                input_change_prev_scalar,
+                input_norm_prev_prev_scalar,
+                _tensor_l1_mean_scalar(raw_input),
+                output_change_prev_scalar,
+                output_norm_prev_prev_scalar,
+                _tensor_l1_mean_scalar(cond.cache),
+            )
+        ).tolist()
+
+        input_change_curr_rel = input_change_curr / (input_norm_prev + 1e-8)
+        input_change_prev_rel = (
+            input_change_prev / (input_norm_prev_prev + 1e-8) if cond.prev_prev_raw_input is not None else 0.0
+        )
+        input_mean_prev = input_norm_prev
+        output_change_prev_rel = (
+            output_change_prev / (output_norm_prev_prev + 1e-8) if cond.prev_prev_raw_output is not None else 0.0
+        )
         residual_norm = cache_norm / (input_mean_curr + 1e-8)
 
         return torch.tensor(
             [
-                timestep_value / 1000.0,
+                timestep_float / 1000.0,
                 input_change_curr_rel,
                 input_change_prev_rel,
                 input_mean_curr,
@@ -321,7 +352,7 @@ class WanEasyCacheState:
         *,
         pair_key: EasyCachePairKey,
         raw_input: torch.Tensor,
-        timestep_value: float,
+        timestep_value: float | torch.Tensor,
         step_idx: int,
         do_true_cfg: bool,
     ) -> bool:
@@ -410,7 +441,9 @@ class WanEasyCacheState:
         state.previous_raw_input = raw_input.detach().clone()
         state.prev_prev_raw_output = state.previous_raw_output
         state.previous_raw_output = output.detach().clone()
-        state.cache = (output - raw_input).detach().clone()
+        # Subtraction already returns fresh storage. Cloning that result again
+        # adds a full-latent allocation and copy on every computed branch.
+        state.cache = output.detach() - raw_input.detach()
         self.stats.calc_forwards += 1
 
 
@@ -532,10 +565,6 @@ class WanEasyCacheMixin:
             num_steps=num_steps,
         )
 
-    @staticmethod
-    def _easycache_timestep_value(t: torch.Tensor) -> float:
-        return float(t.flatten()[0].item()) if torch.is_tensor(t) else float(t)
-
     def _easycache_transformer_id(self, positive_kwargs: dict[str, Any]) -> str:
         current_model = positive_kwargs.get("current_model")
         if current_model is not None and current_model is getattr(self, "transformer_2", None):
@@ -574,6 +603,10 @@ class WanEasyCacheMixin:
             stats.skip_forwards,
         )
 
+    def _release_easycache_request_state(self) -> None:
+        """Release per-request histories while retaining predictor weights."""
+        self._easycache_state = None
+
     def predict_noise_maybe_with_easycache(
         self,
         do_true_cfg: bool,
@@ -609,7 +642,7 @@ class WanEasyCacheMixin:
         step_idx = 0 if step_idx is None else step_idx
         pair_key = (transformer_id, patch_id)
         timestep = self._current_timestep
-        timestep_value = 0.0 if timestep is None else self._easycache_timestep_value(timestep)
+        timestep_value = 0.0 if timestep is None else timestep
         pp_size = self._safe_pipeline_parallel_world_size()
         decide_locally = pp_size == 1 or is_pipeline_last_stage()
         should_skip = False

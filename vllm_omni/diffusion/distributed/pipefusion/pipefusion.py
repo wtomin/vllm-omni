@@ -163,6 +163,13 @@ class PipeFusionPipelineMixin(ABC):
             if callable(reset_cache := getattr(module, "pipefusion_reset_cache", None)):
                 reset_cache()
 
+    def _release_pipefusion_denoise_caches(self) -> None:
+        """Drop PipeFusion tensors after PP sends drain and before VAE decode."""
+        if not is_pipefusion_initialized():
+            return
+        self.scheduler.clear_patch_caches()
+        self._reset_pipefusion_caches()
+
     @abstractmethod
     def prepare_model_kwargs(
         self,

@@ -468,6 +468,18 @@ class TestPipeFusionPipelineMixin:
         assert runtime.warmup_steps == 4
         assert runtime.split_dim == "temporal"
 
+    def test_release_pipefusion_denoise_caches(self, monkeypatch):
+        calls: list[str] = []
+        pipeline = SimpleNamespace(
+            scheduler=SimpleNamespace(clear_patch_caches=lambda: calls.append("scheduler")),
+            _reset_pipefusion_caches=lambda: calls.append("modules"),
+        )
+        monkeypatch.setattr(pf_pipeline, "is_pipefusion_initialized", lambda: True)
+
+        PipeFusionPipelineMixin._release_pipefusion_denoise_caches(pipeline)
+
+        assert calls == ["scheduler", "modules"]
+
     def test_async_pipeline_prefers_easycache_predict_hook(self, monkeypatch):
         runtime = PipeFusionRuntime()
         runtime.num_pipeline_patch = 2
