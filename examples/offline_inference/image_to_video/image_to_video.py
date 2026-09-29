@@ -413,6 +413,11 @@ def parse_args() -> argparse.Namespace:
             '"max_sequence_length": 4096, "guardrails": false}\'.'
         ),
     )
+    parser.add_argument(
+        "--enable-rotational-pipefusion",
+        action="store_true",
+        help="Enable rotational PipeFusion patch rotation and skipping. Requires --enable-pipefusion.",
+    )
     return parser.parse_args()
 
 
@@ -712,6 +717,7 @@ def main():
         frame_rate=frame_rate,
         pipefusion_warmup_steps=args.pipefusion_warmup_steps,
         pipefusion_split_dim=args.pipefusion_split_dim,
+        enable_rotational_pipefusion=args.enable_rotational_pipefusion,
         extra_args=sampling_extra_args,
     )
     if flow_shift is not None:

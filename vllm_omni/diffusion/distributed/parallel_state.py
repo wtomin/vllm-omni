@@ -321,6 +321,10 @@ def is_pipeline_last_stage():
     return get_pipeline_parallel_rank() == (get_pipeline_parallel_world_size() - 1)
 
 
+def is_pipeline_intermediate_stage():
+    return 0 < get_pipeline_parallel_rank() < (get_pipeline_parallel_world_size() - 1)
+
+
 # CFG
 def is_cfg_group_initialized() -> bool:
     """Return whether the classifier-free-guidance group has been created."""

@@ -463,6 +463,11 @@ def parse_args() -> argparse.Namespace:
         help="Dimension along which to split latents into patches for PipeFusion (default: height).",
     )
     parser.add_argument(
+        "--enable-rotational-pipefusion",
+        action="store_true",
+        help="Enable rotational PipeFusion patch rotation and skipping. Requires --enable-pipefusion.",
+    )
+    parser.add_argument(
         "--enable-expert-parallel",
         action="store_true",
         help="Enable expert parallelism for MoE layers.",
@@ -680,6 +685,7 @@ def main():
         extra_args=extra_args,
         pipefusion_warmup_steps=args.pipefusion_warmup_steps,
         pipefusion_split_dim=args.pipefusion_split_dim,
+        enable_rotational_pipefusion=args.enable_rotational_pipefusion,
     )
     if video_defaults is not None:
         sampling_kwargs["fps"] = args.fps

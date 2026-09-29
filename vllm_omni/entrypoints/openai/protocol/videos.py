@@ -249,6 +249,10 @@ class VideoGenerationRequest(BaseModel):
         gt=0.0,
         description="Duration in seconds for model-generated audio. Defaults to the generated video duration.",
     )
+    enable_rotational_pipefusion: bool | None = Field(
+        default=None,
+        description="Enable rotational PipeFusion patch rotation and skipping for this request.",
+    )
 
     # vllm-omni extensions for post-generation frame interpolation.
     enable_frame_interpolation: bool = Field(

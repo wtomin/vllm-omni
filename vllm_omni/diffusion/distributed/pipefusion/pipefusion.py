@@ -19,10 +19,13 @@ from functools import wraps
 from typing import TYPE_CHECKING, Any
 
 import torch
+from vllm.sequence import IntermediateTensors
 
 from vllm_omni.diffusion.distributed.parallel_state import (
     get_classifier_free_guidance_world_size,
+    get_pipeline_parallel_rank,
     is_pipeline_first_stage,
+    is_pipeline_intermediate_stage,
     is_pipeline_last_stage,
 )
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
@@ -158,16 +161,45 @@ class PipeFusionPipelineMixin(ABC):
 
                 cls.predict_noise_maybe_with_cfg = wrapped_predict_noise_maybe_with_cfg
 
+            predict_noise = getattr(cls, "predict_noise", None)
+            # Skip already-wrapped inherited implementations (e.g. DMD2 pipelines
+            # subclassing a PipeFusion pipeline) to avoid double-capturing ITs.
+            if callable(predict_noise) and not getattr(predict_noise, "_pipefusion_it_capture", False):
+
+                @wraps(predict_noise)
+                def wrapped_predict_noise(self, *args: Any, **kwargs: Any) -> Any:
+                    if (intermediate_tensors := kwargs.get("intermediate_tensors")) is not None:
+                        if (
+                            self._pipefusion_capture_intermediate_tensors
+                            and runtime.pipeline_patch_idx == self._pipefusion_capture_patch_idx
+                            and not is_pipeline_first_stage()
+                        ):
+                            self._pipefusion_warmup_intermediate_tensors.append(intermediate_tensors)
+                        if self._pipefusion_capture_last_stage_intermediate_tensors:
+                            self._pipefusion_last_stage_intermediate_tensors.append(intermediate_tensors)
+                    return predict_noise(self, *args, **kwargs)
+
+                wrapped_predict_noise._pipefusion_it_capture = True
+                cls.predict_noise = wrapped_predict_noise
+
     @staticmethod
     def _configure_pipefusion_run(req: "OmniDiffusionRequest") -> None:
-        if sampling_params := getattr(req, "sampling_params", None):
-            get_pipefusion_runtime().set_run_config(
-                warmup_steps=getattr(sampling_params, "pipefusion_warmup_steps", None),
-                split_dim=getattr(sampling_params, "pipefusion_split_dim", None),
-            )
+        sampling_params = getattr(req, "sampling_params", None)
+        get_pipefusion_runtime().set_run_config(
+            warmup_steps=getattr(sampling_params, "pipefusion_warmup_steps", None),
+            split_dim=getattr(sampling_params, "pipefusion_split_dim", None),
+            # Rotation is a per-request opt-in: a request that does not ask for it
+            # must not inherit the previous request's setting (the runtime is shared).
+            use_rotational_pipefusion=bool(getattr(sampling_params, "enable_rotational_pipefusion", False)),
+        )
 
     def _reset_pipefusion_caches(self) -> None:
         runtime = get_pipefusion_runtime()
+        self._pipefusion_warmup_intermediate_tensors: list[IntermediateTensors] = []
+        self._pipefusion_last_stage_intermediate_tensors: list[IntermediateTensors] = []
+        self._pipefusion_capture_intermediate_tensors = False
+        self._pipefusion_capture_last_stage_intermediate_tensors = False
+        self._pipefusion_capture_patch_idx = 0
         for module in self.modules():
             if callable(reset_cache := getattr(module, "pipefusion_reset_cache", None)):
                 if runtime.request_id is None:
@@ -225,41 +257,100 @@ class PipeFusionPipelineMixin(ABC):
             self.scheduler.split_caches_for_patches(split_sizes, dim=split_dim)
 
         num_patch = runtime.num_pipeline_patch
+        patch_indices = list(range(num_patch))
+        rotation_requested = runtime.use_rotational_pipefusion
+        if rotation_requested:
+            if num_patch < 2:
+                raise ValueError(
+                    "Rotational PipeFusion requires pipeline-parallel-size >= 2 "
+                    f"(got pipeline patches = {num_patch})."
+                )
+            self._pipefusion_capture_patch_idx = runtime.get_initial_patch_indices()[0]
+
         for i, t in enumerate(timesteps):
+            pp_rank = get_pipeline_parallel_rank()
             self._current_timestep = t
             set_forward_context_denoise_step_idx(runtime.warmup_steps + i)
+            self._pipefusion_capture_intermediate_tensors = rotation_requested and i == 0
+            self._pipefusion_capture_last_stage_intermediate_tensors = False
 
-            self._sync_pp_send()
+            # First async timestep runs in original PipeFusion order to warm
+            # per-comm-id metadata before rotational out-of-order receives.
+            rotation_active = rotation_requested and i > 0
+            if rotation_active and i == 1:
+                patch_indices = runtime.get_initial_patch_indices()
+            # in Rotational PipeFusion, `patch_latents` stores latents for the next timestep
+            patch_latents_step = patch_latents.copy()
+            last_stage_patch_indices = (
+                runtime.get_last_stage_patch_indices(i - 1) if rotation_active else patch_indices
+            )
 
-            for pidx in range(num_patch):
+            if not rotation_requested:
+                # Baseline PipeFusion keeps the per-timestep fence. Rotational
+                # PipeFusion drops it so sends overlap with the next timestep.
+                self._sync_pp_send()
+
+            for ip, pidx in enumerate(patch_indices):
+                is_first_patch, is_last_patch = (ip == 0), (ip == num_patch - 1)
+                skip_patch, skip_recv = False, False
+                if rotation_active:
+                    skip_patch = is_last_patch
+                    if i == len(timesteps) - 1 and not is_pipeline_last_stage() and ip >= pp_rank + 1:
+                        skip_patch = True
+                    skip_recv = (is_pipeline_intermediate_stage() and i == 1 and is_first_patch) or (
+                        is_pipeline_last_stage() and is_first_patch
+                    )
+
+                if skip_patch and is_pipeline_intermediate_stage():
+                    # intermediate stages can be skipped safely
+                    continue
+
+                runtime.next_patch(pidx, is_first_patch=is_first_patch, is_last_patch=is_last_patch)
+                if rotation_active and is_pipeline_last_stage() and is_last_patch:
+                    self._pipefusion_last_stage_intermediate_tensors = []
+                    self._pipefusion_capture_last_stage_intermediate_tensors = True
+                else:
+                    self._pipefusion_capture_last_stage_intermediate_tensors = False
+
                 positive_kwargs, negative_kwargs, do_true_cfg, scale = self.prepare_model_kwargs(
-                    patch_latents[pidx], t, **self._pipeline_kwargs
+                    patch_latents_step[pidx], t, **self._pipeline_kwargs
                 )
 
                 cfg_parallel_ready = do_true_cfg and get_classifier_free_guidance_world_size() > 1
                 n_branches = 1 if (cfg_parallel_ready or not do_true_cfg) else 2
 
-                noise_pred = self.predict_noise_maybe_with_cfg(
-                    do_true_cfg=do_true_cfg,
-                    true_cfg_scale=scale,
-                    positive_kwargs=positive_kwargs,
-                    negative_kwargs=negative_kwargs,
-                    cfg_normalize=False,
-                    skip_sync=True,
-                    inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
-                )
+                noise_pred = None
+                cached_intermediate_tensors = (
+                    self._pipefusion_warmup_intermediate_tensors
+                    if not is_pipeline_last_stage() or i == 1
+                    else self._pipefusion_last_stage_intermediate_tensors
+                ) if skip_recv else None
+                if not (skip_patch and is_pipeline_first_stage()):
+                    noise_pred = self.predict_noise_maybe_with_cfg(
+                        do_true_cfg=do_true_cfg,
+                        true_cfg_scale=scale,
+                        positive_kwargs=positive_kwargs,
+                        negative_kwargs=negative_kwargs,
+                        cfg_normalize=False,
+                        skip_sync=True,
+                        inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
+                        intermediate_tensors=cached_intermediate_tensors,
+                    )
 
+                if rotation_active:
+                    pidx = last_stage_patch_indices[ip]
                 updated_latents = self.scheduler_step_maybe_with_cfg(
                     noise_pred,
                     t,
-                    patch_latents[pidx],
+                    patch_latents_step[pidx],
                     do_true_cfg,
                     loopback_comm_id=f"pf-lb-{pidx}",
                 )
                 if updated_latents is not None:
                     patch_latents[pidx] = updated_latents
 
-                runtime.next_patch()
+            if rotation_active:  # Roll right by 1 for the next timestep
+                patch_indices = patch_indices[-1:] + patch_indices[:-1]
 
             pbar.update()
 
