@@ -26,8 +26,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SCRIPT_DIR}"
 cd "${REPO_ROOT}"
 
-# shellcheck disable=SC1091
-source "${REPO_ROOT}/env.sh"
 
 # ---- Config ----
 SINGLE_GPU="${SINGLE_GPU:-0}"
@@ -43,8 +41,6 @@ RESULT_DIR="${RESULT_DIR:-${REPO_ROOT}/benchmarks/diffusion/results/wan22_rpf_ea
 [[ -f "${CAPTIONS}" ]] || { echo "ERROR: captions file not found: ${CAPTIONS}" >&2; exit 1; }
 [[ -f "${LAZY_CKPT}" ]] || { echo "ERROR: lazy ckpt not found: ${LAZY_CKPT}" >&2; exit 1; }
 
-BRANCH="$(git branch --show-current)"
-echo "branch: ${BRANCH}  (expect pipefusion_wan_cache_rpf)"
 echo "result dir: ${RESULT_DIR}"
 
 EXTRA_BODY="{\"lazy_enabled\":true,\"lazy_ckpt\":\"${LAZY_CKPT}\",\"lazy_threshold\":${LAZY_THRESHOLD},\"lazy_warmup_steps\":${LAZY_WARMUP_STEPS},\"lazy_log_stats\":true}"
