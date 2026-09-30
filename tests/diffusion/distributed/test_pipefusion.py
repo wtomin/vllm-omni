@@ -542,6 +542,7 @@ class TestPipeFusionPipelineMixin:
         runtime.warmup_steps = 3
         monkeypatch.setattr(pf_pipeline, "get_pipefusion_runtime", lambda: runtime)
         monkeypatch.setattr(pf_pipeline, "is_pipeline_last_stage", lambda: True)
+        monkeypatch.setattr(pf_pipeline, "get_pipeline_parallel_rank", lambda: 0)
         monkeypatch.setattr(pf_pipeline, "get_classifier_free_guidance_world_size", lambda: 1)
 
         class _Scheduler:
