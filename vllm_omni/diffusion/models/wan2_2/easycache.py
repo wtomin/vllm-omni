@@ -495,6 +495,16 @@ class WanEasyCacheMixin:
                     do_true_cfg=do_true_cfg,
                 ):
                     flags[k] = 1
+            # Rotational PipeFusion feeds the last stage's last-patch intermediate
+            # tensors (captured while computing this step's anchor patch) into the
+            # next step's first patch. If EasyCache skipped the anchor patch, the
+            # capture would be empty/stale and the next step would reuse mismatched
+            # tensors, so the anchor patch is forced to always calc.
+            runtime = get_pipefusion_runtime()
+            step_i = step_idx - runtime.warmup_steps
+            if runtime.use_rotational_pipefusion and step_i > 0:
+                anchor_pidx = runtime.get_last_stage_patch_indices(step_i - 1)[-1]
+                flags[patch_ids.index(anchor_pidx)] = 0
         get_pp_group().broadcast(flags, src=pp_size - 1)
         self._easycache_step_plan = {pidx: bool(flags[k]) for k, pidx in enumerate(patch_ids)}
 
@@ -663,6 +673,9 @@ class WanEasyCacheMixin:
         inter_comm_ids: list[str] | None = None,
         intermediate_tensors: list | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, ...] | None:
+        # Signals to PipeFusion (e.g. last-stage IT capture bookkeeping) whether this
+        # call reused cached outputs without running predict_noise.
+        self._easycache_last_call_skipped = False
         state = getattr(self, "_easycache_state", None)
         if state is None:
             return self.predict_noise_maybe_with_cfg(
@@ -713,6 +726,7 @@ class WanEasyCacheMixin:
                 should_skip = bool(skip_flag.item())
 
         if should_skip:
+            self._easycache_last_call_skipped = True
             if pp_size > 1 and not is_pipeline_last_stage():
                 return None
             positive_noise_pred = state.get_cached_output(

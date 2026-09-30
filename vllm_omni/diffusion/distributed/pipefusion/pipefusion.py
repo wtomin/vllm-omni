@@ -197,6 +197,7 @@ class PipeFusionPipelineMixin(ABC):
         runtime = get_pipefusion_runtime()
         self._pipefusion_warmup_intermediate_tensors: list[IntermediateTensors] = []
         self._pipefusion_last_stage_intermediate_tensors: list[IntermediateTensors] = []
+        self._pipefusion_stashed_last_stage_intermediate_tensors: list[IntermediateTensors] = []
         self._pipefusion_capture_intermediate_tensors = False
         self._pipefusion_capture_last_stage_intermediate_tensors = False
         self._pipefusion_capture_patch_idx = 0
@@ -313,7 +314,15 @@ class PipeFusionPipelineMixin(ABC):
                     continue
 
                 runtime.next_patch(pidx, is_first_patch=is_first_patch, is_last_patch=is_last_patch)
-                if rotation_active and is_pipeline_last_stage() and is_last_patch:
+                capture_last_stage_it = rotation_active and is_pipeline_last_stage() and is_last_patch
+                if capture_last_stage_it:
+                    # Stash the previous step's capture first: if EasyCache skips this
+                    # patch, predict_noise never runs and no fresh ITs are captured;
+                    # the next step's first patch must then reuse the stashed
+                    # (one-step-staler) tensors instead of an empty list.
+                    self._pipefusion_stashed_last_stage_intermediate_tensors = (
+                        self._pipefusion_last_stage_intermediate_tensors
+                    )
                     self._pipefusion_last_stage_intermediate_tensors = []
                     self._pipefusion_capture_last_stage_intermediate_tensors = True
                 else:
@@ -373,6 +382,13 @@ class PipeFusionPipelineMixin(ABC):
                             inter_comm_ids=[f"pf-it-{pidx}-{b}" for b in range(n_branches)],
                             intermediate_tensors=cached_intermediate_tensors,
                         )
+
+                if capture_last_stage_it and getattr(self, "_easycache_last_call_skipped", False):
+                    # EasyCache skipped this patch: restore the stashed ITs captured in
+                    # an earlier step so the next step's first patch has a usable cache.
+                    self._pipefusion_last_stage_intermediate_tensors = (
+                        self._pipefusion_stashed_last_stage_intermediate_tensors
+                    )
 
                 if rotation_active:
                     pidx = last_stage_patch_indices[ip]
