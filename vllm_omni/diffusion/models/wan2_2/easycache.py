@@ -484,7 +484,8 @@ class WanEasyCacheMixin:
         flags = torch.zeros(len(patch_ids), dtype=torch.int32, device=self.device)
         if is_pipeline_last_stage():
             timestep = self._current_timestep
-            timestep_value = 0.0 if timestep is None else self._easycache_timestep_value(timestep)
+            # should_skip_pair accepts a float or a tensor timestep.
+            timestep_value = 0.0 if timestep is None else timestep
             for k, pidx in enumerate(patch_ids):
                 if state.should_skip_pair(
                     pair_key=(transformer_id, pidx),
