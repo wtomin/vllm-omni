@@ -50,8 +50,11 @@ def reset_pipefusion_runtime(monkeypatch):
 
 
 def _set_patch_idx(runtime: PipeFusionRuntime, patch_idx: int) -> None:
-    runtime.pipeline_patch_idx = patch_idx
-    runtime.patch_idx_tensor = torch.tensor(patch_idx, dtype=torch.int64)
+    if not hasattr(runtime, "patch_idx_tensor"):
+        runtime.patch_idx_tensor = torch.tensor(patch_idx, dtype=torch.int64)
+    # next_patch also refreshes is_first_patch/is_last_patch, which the scheduler
+    # mixin gates shared- and first-patch-only state on.
+    runtime.next_patch(patch_idx=patch_idx)
 
 
 class TestPipeFusionRuntime:
