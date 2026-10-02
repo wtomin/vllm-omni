@@ -233,21 +233,8 @@ def test_i2v_diffuse_selects_stage_guidance_and_expands_timesteps() -> None:
     torch.testing.assert_close(result, torch.full_like(latents, 2.0))
 
 
-class _FixedRiskPredictor(nn.Module):
-    horizon = 2
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        return features.new_tensor([[0.01, 0.02]])
-
-
 def _make_easycache_state(num_steps: int = 5) -> WanEasyCacheState:
-    return WanEasyCacheState(
-        predictor=_FixedRiskPredictor(),
-        calibration_offsets=torch.zeros(2),
-        threshold=1.0,
-        warmup_steps=0,
-        num_steps=num_steps,
-    )
+    return WanEasyCacheState(threshold=1.0, warmup_steps=0, num_steps=num_steps)
 
 
 def test_i2v_easycache_reuses_branch_caches_before_cfg_combine() -> None:
@@ -255,69 +242,84 @@ def test_i2v_easycache_reuses_branch_caches_before_cfg_combine() -> None:
     pipeline._easycache_state = _make_easycache_state()
     pipeline._current_timestep = torch.tensor(900)
     raw = torch.ones(1, 4, 1, 2, 2)
+    raw2 = torch.full_like(raw, 1.01)
+    raw3 = torch.full_like(raw, 1.02)
     calls: list[str] = []
 
     def fake_predict_noise(**kwargs):
-        branch = kwargs["branch"]
-        calls.append(branch)
-        residual = 2.0 if branch == "cond" else 0.5
-        return raw + residual
+        calls.append(kwargs["branch"])
+        return kwargs["hidden_states"] * (1.5 if kwargs["branch"] == "cond" else 0.9)
 
     pipeline.predict_noise = fake_predict_noise  # type: ignore[method-assign]
-    positive_kwargs = {"current_model": pipeline.transformer, "branch": "cond"}
-    negative_kwargs = {"current_model": pipeline.transformer, "branch": "uncond"}
+    positive_kwargs = {"current_model": pipeline.transformer, "branch": "cond", "hidden_states": raw}
+    negative_kwargs = {"current_model": pipeline.transformer, "branch": "uncond", "hidden_states": raw}
 
-    first = pipeline.predict_noise_maybe_with_easycache(
-        do_true_cfg=True,
-        true_cfg_scale=3.0,
-        positive_kwargs=positive_kwargs,
-        negative_kwargs=negative_kwargs,
-        cfg_normalize=False,
-        raw_input=raw,
-        step_idx=0,
-    )
-    torch.testing.assert_close(first, (raw + 0.5) + 3.0 * ((raw + 2.0) - (raw + 0.5)))
+    def run(raw_input, step_idx):
+        positive_kwargs["hidden_states"] = raw_input
+        negative_kwargs["hidden_states"] = raw_input
+        return pipeline.predict_noise_maybe_with_easycache(
+            do_true_cfg=True,
+            true_cfg_scale=3.0,
+            positive_kwargs=positive_kwargs,
+            negative_kwargs=negative_kwargs,
+            cfg_normalize=False,
+            raw_input=raw_input,
+            step_idx=step_idx,
+        )
 
-    raw2 = torch.full_like(raw, 10.0)
-    second = pipeline.predict_noise_maybe_with_easycache(
-        do_true_cfg=True,
-        true_cfg_scale=3.0,
-        positive_kwargs=positive_kwargs,
-        negative_kwargs=negative_kwargs,
-        cfg_normalize=False,
-        raw_input=raw2,
-        step_idx=1,
-    )
+    first = run(raw, 0)
+    first_pos, first_neg = 1.5 * raw, 0.9 * raw
+    torch.testing.assert_close(first, first_neg + 3.0 * (first_pos - first_neg))
 
-    torch.testing.assert_close(second, (raw2 + 0.5) + 3.0 * ((raw2 + 2.0) - (raw2 + 0.5)))
-    assert calls == ["cond", "uncond"]
-    assert pipeline._easycache_state.stats.skip_pairs == 1
-    assert pipeline._easycache_state.stats.skip_forwards == 2
+    second = run(raw2, 1)
+    second_pos, second_neg = 1.5 * raw2, 0.9 * raw2
+    torch.testing.assert_close(second, second_neg + 3.0 * (second_pos - second_neg))
+    assert pipeline._easycache_last_call_skipped is False
+
+    third = run(raw3, 2)
+    # Steps 0 and 1 compute (warmup history), step 2 skips and reconstructs with
+    # the residual-delta correction.
+    assert pipeline._easycache_last_call_skipped is True
+    cache_pos = (1.5 * raw2) - raw2
+    cache_pos_prev = (1.5 * raw) - raw
+    cache_neg = (0.9 * raw2) - raw2
+    cache_neg_prev = (0.9 * raw) - raw
+    expected_pos = raw3 + cache_pos + (cache_pos - cache_pos_prev)
+    expected_neg = raw3 + cache_neg + (cache_neg - cache_neg_prev)
+    torch.testing.assert_close(third, expected_neg + 3.0 * (expected_pos - expected_neg))
+
+    assert calls == ["cond", "uncond", "cond", "uncond"]
+    stats = pipeline._easycache_state.stats
+    assert stats.skip_pairs == 1
+    assert stats.skip_forwards == 2
+    assert stats.calc_pairs == 2
+    assert stats.calc_forwards == 4
 
 
 def test_i2v_easycache_separates_patch_and_transformer_state() -> None:
     state = _make_easycache_state()
     raw = torch.ones(1, 4, 1, 2, 2)
-    state.update_branch(key=("transformer", 0, "cond"), raw_input=raw, output=raw + 1)
-    state.update_branch(key=("transformer", 0, "uncond"), raw_input=raw, output=raw + 2)
+    state.update_branch(key=("transformer", 0, "cond"), raw_input=raw, output=1.1 * raw)
+    state.update_branch(key=("transformer", 0, "cond"), raw_input=1.01 * raw, output=1.11 * raw)
+    state.update_branch(key=("transformer", 0, "uncond"), raw_input=raw, output=0.9 * raw)
 
     assert state.should_skip_pair(
         pair_key=("transformer", 0),
-        raw_input=raw + 1,
+        raw_input=1.02 * raw,
         timestep_value=500.0,
         step_idx=1,
         do_true_cfg=True,
     )
     assert not state.should_skip_pair(
         pair_key=("transformer", 1),
-        raw_input=raw + 1,
+        raw_input=1.02 * raw,
         timestep_value=500.0,
         step_idx=1,
         do_true_cfg=True,
     )
     assert not state.should_skip_pair(
         pair_key=("transformer_2", 0),
-        raw_input=raw + 1,
+        raw_input=1.02 * raw,
         timestep_value=500.0,
         step_idx=1,
         do_true_cfg=True,
@@ -326,10 +328,6 @@ def test_i2v_easycache_separates_patch_and_transformer_state() -> None:
 
 def test_i2v_easycache_warmup_covers_pipefusion_warmup(monkeypatch) -> None:
     pipeline = _make_i2v_pipeline(expand_timesteps=True)
-    monkeypatch.setattr(
-        "vllm_omni.diffusion.models.wan2_2.easycache.load_horizon_predictor",
-        lambda checkpoint_path, device, threshold_override: (_FixedRiskPredictor(), torch.zeros(2), 1.0, {}),
-    )
     monkeypatch.setattr(
         "vllm_omni.diffusion.models.wan2_2.easycache.is_pipefusion_initialized",
         lambda: True,
@@ -342,7 +340,7 @@ def test_i2v_easycache_warmup_covers_pipefusion_warmup(monkeypatch) -> None:
     pipeline._safe_cfg_parallel_world_size = lambda: 1  # type: ignore[method-assign]
 
     pipeline._configure_easycache_for_request(
-        [SimpleNamespace(extra_args={"lazy_enabled": True, "lazy_ckpt": "ckpt", "lazy_warmup_steps": 2})],
+        [SimpleNamespace(extra_args={"d2cache_enabled": True, "d2cache_warmup_steps": 2})],
         num_steps=10,
     )
 

@@ -6,44 +6,34 @@
 Reads the ``perf.tsv`` produced by ``run_wan22_parallel_compare.sh`` and reports:
 
 * performance per mode (total / diffusion / VAE time, peak memory, speedup),
-* frame-level accuracy against the baseline video of the same prompt (PSNR, SSIM),
-* FVD between each mode and the baseline, using clip-level I3D features so that
-  a handful of videos still yields a usable sample count.
+* per-video accuracy against the baseline video of the same prompt:
+  PSNR from the pooled per-pixel MSE of the whole video (data range 1.0),
+  SSIM from torchmetrics per frame averaged inside the video, then averaged
+  across videos,
+* FVD between each mode and the baseline with exactly one I3D clip per video
+  (``fvd_num_frames`` frames sampled every ``fvd_frame_stride`` frames), so
+  N videos give N samples per distribution.
 
 Outputs (in the results directory): ``report.md``, ``metrics_per_video.csv``,
 ``metrics_fvd.csv`` and ``metrics.json``.
+
+PSNR / SSIM / FVD follow ``evaluate_quality.py`` (MetricComputer, FVDComputer,
+``_read_fvd_clip``, ``frechet_distance``) so numbers stay comparable with the
+EasyCache / MagCache / D2Cache evaluation tables.
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import importlib.util
 import json
 import math
-import sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
-FRAME_METRICS_PATH = REPO_ROOT / "examples" / "offline_inference" / "image_to_video" / "video_frame_metrics.py"
-
-
-def load_frame_metrics():
-    spec = importlib.util.spec_from_file_location("video_frame_metrics", FRAME_METRICS_PATH)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"Cannot import frame metrics helper from {FRAME_METRICS_PATH}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["video_frame_metrics"] = module
-    spec.loader.exec_module(module)
-    return module
-
-
-frame_metrics = load_frame_metrics()
 
 
 def read_meta(results_dir: Path | None) -> dict[str, str]:
@@ -72,9 +62,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", type=Path, default=None, help="Explicit path to a perf.tsv.")
     parser.add_argument("--baseline", default="single", help="Baseline mode name. Default: single.")
     parser.add_argument("--skip-modes", default="", help="Comma separated modes to leave out of the report.")
-    parser.add_argument("--clip-frames", type=int, default=16, help="Frames per clip fed to I3D for FVD.")
-    parser.add_argument("--clip-stride", type=int, default=8, help="Stride between FVD clips.")
-    parser.add_argument("--fvd-batch-size", type=int, default=4, help="Clips per I3D forward pass.")
+    parser.add_argument(
+        "--fvd-num-frames",
+        type=int,
+        default=11,
+        help="Frames per FVD clip; one clip per video. 11 @ stride 8 exactly spans an 81-frame Wan2.2 video (default: 11).",
+    )
+    parser.add_argument(
+        "--fvd-frame-stride",
+        type=int,
+        default=8,
+        help="Frame stride inside the FVD clip (default: 8).",
+    )
     parser.add_argument("--device", default="cuda", help="Device for I3D feature extraction.")
     parser.add_argument(
         "--i3d-path",
@@ -121,33 +120,69 @@ def load_frames(path: Path, max_frames: int | None = None) -> list[np.ndarray]:
 
 
 def video_pair_metrics(reference_path: Path, compare_path: Path, max_frames: int | None) -> dict[str, Any]:
+    """Per-video PSNR / SSIM / MAE, aligned with ``evaluate_quality.evaluate_pair``.
+
+    PSNR is ``-10 * log10(mse)`` with ``mse`` pooled over every pixel of the
+    video on the [0, 1] scale (data range 1.0). SSIM is torchmetrics'
+    ``structural_similarity_index_measure(data_range=1.0)`` per frame, averaged
+    inside the video. MAE stays in 0-255 units and is only reported as extra
+    context.
+    """
+    import cv2
+    import torch
+
+    try:
+        from torchmetrics.functional.image import structural_similarity_index_measure
+    except ImportError as error:
+        raise RuntimeError("install torchmetrics to compute SSIM") from error
+
     reference = load_frames(reference_path, max_frames)
     compare = load_frames(compare_path, max_frames)
-
-    psnr_values: list[float] = []
-    ssim_values: list[float] = []
-    abs_diff: list[float] = []
-    for ref_frame, cmp_frame in zip(reference, compare):
-        if ref_frame.shape != cmp_frame.shape:
-            import cv2
-
-            cmp_frame = cv2.resize(cmp_frame, (ref_frame.shape[1], ref_frame.shape[0]), interpolation=cv2.INTER_AREA)
-        psnr_values.append(frame_metrics.compute_psnr(ref_frame, cmp_frame))
-        ssim_values.append(frame_metrics.compute_ssim(ref_frame, cmp_frame))
-        abs_diff.append(float(np.mean(np.abs(ref_frame.astype(np.float32) - cmp_frame.astype(np.float32)))))
-
-    if not psnr_values:
+    if not reference or not compare:
         raise RuntimeError(f"No overlapping frames between {reference_path} and {compare_path}")
 
-    finite_psnr = [value for value in psnr_values if math.isfinite(value)]
+    squared_error = 0.0
+    value_count = 0
+    ssim_sum = 0.0
+    abs_diff: list[float] = []
+    identical_frames = 0
+    frame_count = 0
+
+    for ref_frame, cmp_frame in zip(reference, compare):
+        if ref_frame.shape != cmp_frame.shape:
+            cmp_frame = cv2.resize(
+                cmp_frame, (ref_frame.shape[1], ref_frame.shape[0]), interpolation=cv2.INTER_AREA
+            )
+
+        ref_rgb = cv2.cvtColor(ref_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        cmp_rgb = cv2.cvtColor(cmp_frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+        difference = ref_rgb - cmp_rgb
+        frame_squared_error = float(np.square(difference).sum())
+        squared_error += frame_squared_error
+        value_count += difference.size
+        if frame_squared_error == 0.0:
+            identical_frames += 1
+
+        abs_diff.append(float(np.mean(np.abs(ref_frame.astype(np.float32) - cmp_frame.astype(np.float32)))))
+        ssim_sum += float(
+            structural_similarity_index_measure(
+                torch.from_numpy(cmp_rgb).permute(2, 0, 1)[None],
+                torch.from_numpy(ref_rgb).permute(2, 0, 1)[None],
+                data_range=1.0,
+            ).item()
+        )
+        frame_count += 1
+
+    if frame_count == 0:
+        raise RuntimeError(f"No overlapping frames between {reference_path} and {compare_path}")
+
+    mse = squared_error / value_count
     return {
-        "frames": len(psnr_values),
-        "psnr_mean": float(np.mean(finite_psnr)) if finite_psnr else math.inf,
-        "psnr_min": float(np.min(finite_psnr)) if finite_psnr else math.inf,
-        "ssim_mean": float(np.mean(ssim_values)),
-        "ssim_min": float(np.min(ssim_values)),
-        "mae_mean": float(np.mean(abs_diff)),
-        "identical_frames": int(sum(1 for value in psnr_values if math.isinf(value))),
+        "frames": frame_count,
+        "psnr": math.inf if mse == 0 else -10.0 * math.log10(mse),
+        "ssim": ssim_sum / frame_count,
+        "mae": float(np.mean(abs_diff)),
+        "identical_frames": identical_frames,
     }
 
 
@@ -162,87 +197,85 @@ def load_i3d(path: Path | None, device: str):
     return model.to(device).eval(), torch.device(device)
 
 
+def read_fvd_clip(path: Path, num_frames: int, frame_stride: int) -> np.ndarray:
+    """Decode exactly ``num_frames`` RGB frames at indices 0, stride, 2*stride, ...
+
+    Mirrors ``evaluate_quality._read_fvd_clip``: the video must contain at least
+    ``(num_frames - 1) * frame_stride + 1`` decodable frames.
+    """
+    import cv2
+
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        raise RuntimeError(f"cannot open FVD video {path}")
+    selected = []
+    wanted = {index * frame_stride for index in range(num_frames)}
+    last_index = (num_frames - 1) * frame_stride
+    try:
+        for index in range(last_index + 1):
+            ok, frame = capture.read()
+            if not ok:
+                break
+            if index in wanted:
+                selected.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    finally:
+        capture.release()
+    if len(selected) != num_frames:
+        required = last_index + 1
+        raise ValueError(f"FVD video {path} has fewer than {required} decodable frames")
+    return np.stack(selected)
+
+
 def extract_features(
     video_path: Path,
     model,
     device,
     *,
-    clip_frames: int,
-    clip_stride: int,
-    batch_size: int,
-    max_clips: int | None = None,
+    num_frames: int,
+    frame_stride: int,
 ) -> np.ndarray:
-    """Return one I3D logit vector per temporal clip of the video."""
-    import cv2
+    """Return exactly one I3D feature vector of shape (1, D) for the video."""
     import torch
 
-    frames = load_frames(video_path)
-    total = len(frames)
-    starts = list(range(0, max(total - clip_frames, 0) + 1, clip_stride))
-    if not starts:
-        starts = [0]
-    if max_clips is not None:
-        starts = starts[:max_clips]
-
-    clips = np.stack(
-        [
-            np.stack(
-                [
-                    cv2.resize(frame, (224, 224), interpolation=cv2.INTER_AREA)
-                    for frame in frames[start : start + clip_frames]
-                ]
-            )
-            for start in starts
-        ]
-    )  # (N, T, H, W, C) uint8 BGR
-    if clips.shape[1] < clip_frames:  # pad short clips by repeating the last frame
-        pad = np.repeat(clips[:, -1:], clip_frames - clips.shape[1], axis=1)
-        clips = np.concatenate([clips, pad], axis=1)
-
-    tensor = torch.from_numpy(clips[..., ::-1].copy()).permute(0, 4, 1, 2, 3).contiguous().float()
-
-    features: list[np.ndarray] = []
+    clip = read_fvd_clip(video_path, num_frames=num_frames, frame_stride=frame_stride)
+    video = torch.from_numpy(clip).permute(3, 0, 1, 2).unsqueeze(0).contiguous()
     with torch.no_grad():
-        for start in range(0, tensor.shape[0], batch_size):
-            batch = tensor[start : start + batch_size].to(device, non_blocking=True)
-            output = model(batch, rescale=True, resize=False, return_features=True)
-            features.append(output.detach().float().cpu().numpy())
-    return np.concatenate(features, axis=0)
+        output = model(video.to(device), rescale=True, resize=True, return_features=True)
+    return output.detach().float().cpu().numpy().reshape(1, -1)
 
 
-def frechet_distance(first: np.ndarray, second: np.ndarray, eps: float = 1e-6) -> float:
-    from scipy import linalg
+def frechet_distance(origin_features: np.ndarray, target_features: np.ndarray) -> float:
+    """Fréchet distance between two sets of per-video I3D features.
 
-    first = np.asarray(first, dtype=np.float64)
-    second = np.asarray(second, dtype=np.float64)
-    if first.ndim != 2 or second.ndim != 2:
-        raise ValueError("FVD expects (N, D) feature arrays.")
+    Same formulation as ``evaluate_quality.frechet_distance``: covariance
+    factors scaled by ``1 / sqrt(n - 1)``, the cross term taken as the sum of
+    singular values of ``origin_factor.T @ target_factor``, clamped at zero.
+    Requires at least two videos on each side.
+    """
+    origin_features = np.asarray(origin_features, dtype=np.float64)
+    target_features = np.asarray(target_features, dtype=np.float64)
+    if origin_features.ndim != 2 or target_features.ndim != 2:
+        raise ValueError("FVD features must be rank-2 arrays")
+    if origin_features.shape[1] != target_features.shape[1]:
+        raise ValueError("FVD feature dimensions do not match")
+    if min(len(origin_features), len(target_features)) < 2:
+        raise ValueError("FVD requires at least two videos in each distribution")
 
-    mu_first = first.mean(axis=0)
-    mu_second = second.mean(axis=0)
-    cov_first = np.cov(first, rowvar=False)
-    cov_second = np.cov(second, rowvar=False)
-    cov_first = np.atleast_2d(cov_first) + np.eye(cov_first.shape[0]) * eps
-    cov_second = np.atleast_2d(cov_second) + np.eye(cov_second.shape[0]) * eps
-
-    diff = mu_first - mu_second
-    product = cov_first @ cov_second
-    covmean = None
-    for attempt in range(5):
-        try:
-            result = linalg.sqrtm(product)
-            candidate = result[0] if isinstance(result, tuple) else result
-        except ValueError:
-            candidate = None
-        if candidate is not None and np.all(np.isfinite(candidate)):
-            covmean = candidate
-            break
-        product = product + np.eye(product.shape[0]) * (eps * (10.0**attempt))
-    if covmean is None:
-        raise RuntimeError("sqrtm failed to converge while computing FVD.")
-    if np.iscomplexobj(covmean):
-        covmean = covmean.real
-    return float(diff @ diff + np.trace(cov_first) + np.trace(cov_second) - 2.0 * np.trace(covmean))
+    origin_mean = origin_features.mean(axis=0)
+    target_mean = target_features.mean(axis=0)
+    origin_centered = origin_features - origin_mean
+    target_centered = target_features - target_mean
+    origin_factor = origin_centered.T / math.sqrt(len(origin_features) - 1)
+    target_factor = target_centered.T / math.sqrt(len(target_features) - 1)
+    covariance_overlap = np.linalg.svd(origin_factor.T @ target_factor, compute_uv=False).sum()
+    mean_distance = np.square(origin_mean - target_mean).sum()
+    distance = (
+        mean_distance
+        + np.square(origin_factor).sum()
+        + np.square(target_factor).sum()
+        - 2 * covariance_overlap
+    )
+    return max(float(distance), 0.0)
 
 
 def format_number(value: float | None, digits: int = 4) -> str:
@@ -310,21 +343,36 @@ def main() -> None:
             key = (row["mode"], row["prompt_id"])
             if key in features:
                 continue
-            features[key] = extract_features(
-                Path(row["video_path"]),
-                model,
-                device,
-                clip_frames=args.clip_frames,
-                clip_stride=args.clip_stride,
-                batch_size=args.fvd_batch_size,
-            )
-            print(f"  {row['mode']} {row['prompt_id']}: {features[key].shape[0]} clips")
+            try:
+                features[key] = extract_features(
+                    Path(row["video_path"]),
+                    model,
+                    device,
+                    num_frames=args.fvd_num_frames,
+                    frame_stride=args.fvd_frame_stride,
+                )
+            except (ValueError, RuntimeError, OSError) as error:
+                print(f"warning: skipping {row['mode']} {row['prompt_id']} for FVD: {error}")
+                continue
+            print(f"  {row['mode']} {row['prompt_id']}: {features[key].shape[0]} feature(s)")
 
-        baseline_features = np.concatenate([features[(args.baseline, pid)] for pid in sorted(baseline_videos)])
+        def stack_features(mode: str) -> np.ndarray:
+            arrays = [
+                features[(mode, row["prompt_id"])]
+                for row in by_mode[mode]
+                if (mode, row["prompt_id"]) in features
+            ]
+            return np.concatenate(arrays) if arrays else np.empty((0, 0))
+
+        baseline_features = stack_features(args.baseline)
         for mode in modes:
-            mode_features = np.concatenate(
-                [features[(mode, row["prompt_id"])] for row in by_mode[mode] if (mode, row["prompt_id"]) in features]
-            )
+            mode_features = stack_features(mode)
+            if min(baseline_features.shape[0], mode_features.shape[0]) < 2:
+                print(
+                    f"warning: FVD needs at least 2 videos per distribution "
+                    f"(baseline={baseline_features.shape[0]}, {mode}={mode_features.shape[0]}); skipping {mode}"
+                )
+                continue
             fvd_rows.append(
                 {
                     "mode": mode,
@@ -333,12 +381,12 @@ def main() -> None:
                     "baseline_samples": int(baseline_features.shape[0]),
                     "mode_samples": int(mode_features.shape[0]),
                     "feature_dim": int(baseline_features.shape[1]),
-                    "clip_frames": args.clip_frames,
-                    "clip_stride": args.clip_stride,
+                    "fvd_num_frames": args.fvd_num_frames,
+                    "fvd_frame_stride": args.fvd_frame_stride,
                 }
             )
 
-    # ---- frame-level accuracy against the baseline ----
+    # ---- per-video accuracy against the baseline ----
     per_video_rows: list[dict[str, Any]] = []
     for row in rows:
         if row["mode"] == args.baseline:
@@ -412,16 +460,14 @@ def main() -> None:
                 "degree": mode_rows[0]["degree"],
                 "videos": len(mode_rows),
                 "frames": int(sum(row["frames"] for row in mode_rows)),
-                "psnr_mean_db": float(np.mean([row["psnr_mean"] for row in mode_rows])),
-                "psnr_min_db": float(np.min([row["psnr_min"] for row in mode_rows])),
-                "ssim_mean": float(np.mean([row["ssim_mean"] for row in mode_rows])),
-                "ssim_min": float(np.min([row["ssim_min"] for row in mode_rows])),
-                "mae_mean": float(np.mean([row["mae_mean"] for row in mode_rows])),
+                "psnr_mean_db": float(np.mean([row["psnr"] for row in mode_rows])),
+                "psnr_min_db": float(np.min([row["psnr"] for row in mode_rows])),
+                "ssim_mean": float(np.mean([row["ssim"] for row in mode_rows])),
+                "ssim_min": float(np.min([row["ssim"] for row in mode_rows])),
+                "mae_mean": float(np.mean([row["mae"] for row in mode_rows])),
                 "identical_frames": int(sum(row["identical_frames"] for row in mode_rows)),
             }
         )
-
-    fvd_by_mode = {row["mode"]: row for row in fvd_rows}
 
     # ---- persist ----
     write_csv(
@@ -436,11 +482,9 @@ def main() -> None:
             "vae_decode_s",
             "peak_mem_gib",
             "frames",
-            "psnr_mean",
-            "psnr_min",
-            "ssim_mean",
-            "ssim_min",
-            "mae_mean",
+            "psnr",
+            "ssim",
+            "mae",
             "identical_frames",
             "prompt",
             "reference",
@@ -451,7 +495,7 @@ def main() -> None:
         write_csv(
             output_dir / "metrics_fvd.csv",
             fvd_rows,
-            ["mode", "baseline", "fvd", "baseline_samples", "mode_samples", "feature_dim", "clip_frames", "clip_stride"],
+            ["mode", "baseline", "fvd", "baseline_samples", "mode_samples", "feature_dim", "fvd_num_frames", "fvd_frame_stride"],
         )
     write_csv(
         output_dir / "perf_summary.csv",
@@ -499,8 +543,8 @@ def main() -> None:
         "fvd": fvd_rows,
         "per_video": [{**row, **{k: format_value(v) for k, v in row.items()}} for row in per_video_rows],
         "config": {
-            "clip_frames": args.clip_frames,
-            "clip_stride": args.clip_stride,
+            "fvd_num_frames": args.fvd_num_frames,
+            "fvd_frame_stride": args.fvd_frame_stride,
             "device": str(args.device),
         },
     }
@@ -538,7 +582,7 @@ def main() -> None:
         "modes; because stages overlap, they are not expected to sum to wall clock._"
     )
     lines.append("")
-    lines.append(f"## Accuracy vs `{args.baseline}` (frame level)")
+    lines.append(f"## Accuracy vs `{args.baseline}` (per video)")
     lines.append("")
     lines.append("| mode | videos | frames | mean PSNR (dB) | min PSNR (dB) | mean SSIM | min SSIM | mean MAE |")
     lines.append("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
@@ -550,7 +594,8 @@ def main() -> None:
         )
     lines.append("")
     lines.append(
-        f"## FVD vs `{args.baseline}` (I3D logits, {args.clip_frames}-frame clips, stride {args.clip_stride})"
+        f"## FVD vs `{args.baseline}` (one I3D clip per video: {args.fvd_num_frames} frames, "
+        f"stride {args.fvd_frame_stride})"
     )
     lines.append("")
     if fvd_rows:
@@ -563,8 +608,11 @@ def main() -> None:
             )
         lines.append("")
         lines.append(
-            "_FVD is a distribution metric: the value compares clip feature statistics of the two sets, "
-            "so lower is better but absolute numbers depend on the sample count._"
+            f"_FVD is a distribution metric: one feature vector per video, so lower is better and the "
+            f"absolute value depends on the sample count (here one sample per video) and on the clip "
+            f"spec ({args.fvd_num_frames} frames @ stride {args.fvd_frame_stride}, "
+            f"needing {(args.fvd_num_frames - 1) * args.fvd_frame_stride + 1} decodable frames; "
+            f"the default 11 @ 8 spans an 81-frame video exactly)._"
         )
     else:
         lines.append("_No non-baseline modes available; FVD skipped._")
@@ -575,8 +623,8 @@ def main() -> None:
     lines.append("| --- | --- | ---: | ---: | ---: | ---: |")
     for row in per_video_rows:
         lines.append(
-            f"| {row['mode']} | {row['prompt_id']} | {format_number(row['psnr_mean'], 3)} "
-            f"| {format_number(row['ssim_mean'], 5)} | {format_number(row['mae_mean'], 4)} "
+            f"| {row['mode']} | {row['prompt_id']} | {format_number(row['psnr'], 3)} "
+            f"| {format_number(row['ssim'], 5)} | {format_number(row['mae'], 4)} "
             f"| {format_number(row.get('total_time_s'), 2)} |"
         )
     lines.append("")

@@ -1,18 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
+"""D2Cache output-residual cache for Wan2.2 T2V/I2V, including PipeFusion PP skip sync.
+
+Keeps the EasyCache skip schedule (accumulated-error threshold) and adds the
+D2Cache residual-delta correction: every skip reconstructs
+``raw_input + cache + correction_scale * residual_delta`` where ``residual_delta``
+is the change of the output residual since the last full compute.
+"""
+
 from __future__ import annotations
 
 import logging
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Literal
 
-import numpy as np
 import torch
-import torch.nn.functional as F
-from torch import nn
 from vllm.sequence import IntermediateTensors
 
 from vllm_omni.diffusion.distributed.parallel_state import (
@@ -28,9 +33,11 @@ from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
 
 logger = logging.getLogger(__name__)
 
-FEATURE_DIM = 8
-EXPECTED_TARGET_CONTRACT = "cumulative_sum_of_local_cache_errors"
-EXPECTED_OUTPUT_CONTRACT = "monotonic_cumulative_risk"
+DEFAULT_D2CACHE_THRESHOLD = 0.05
+DEFAULT_D2CACHE_WARMUP_STEPS = 7
+DEFAULT_D2CACHE_EPSILON = 1e-8
+# Force full computation for the last N steps of a request.
+FINAL_FULL_STEPS = 2
 
 EasyCacheBranch = Literal["cond", "uncond"]
 EasyCacheKey = tuple[str, int, EasyCacheBranch]
@@ -40,163 +47,46 @@ EasyCachePairKey = tuple[str, int]
 @dataclass(frozen=True)
 class WanEasyCacheConfig:
     enabled: bool = False
-    checkpoint_path: str | None = None
-    threshold_override: float | None = None
-    warmup_steps: int = 7
+    threshold: float = DEFAULT_D2CACHE_THRESHOLD
+    warmup_steps: int = DEFAULT_D2CACHE_WARMUP_STEPS
+    epsilon: float = DEFAULT_D2CACHE_EPSILON
     log_stats: bool = False
-
-    @property
-    def signature(self) -> tuple[object, ...]:
-        return (
-            self.checkpoint_path,
-            self.threshold_override,
-            self.warmup_steps,
-        )
 
 
 @dataclass
 class WanEasyCacheStats:
-    prediction_count: int = 0
-    plan_count: int = 0
-    zero_prefix_count: int = 0
     calc_pairs: int = 0
     skip_pairs: int = 0
     calc_forwards: int = 0
     skip_forwards: int = 0
-    prefix_histogram: list[int] = field(default_factory=list)
+    forced_calc_pairs: int = 0
+    correction_scale_sum: float = 0.0
+    correction_scale_count: int = 0
+
+    @property
+    def mean_correction_scale(self) -> float:
+        if self.correction_scale_count == 0:
+            return 0.0
+        return self.correction_scale_sum / self.correction_scale_count
 
 
 @dataclass
 class _BranchState:
     previous_raw_input: torch.Tensor | None = None
-    prev_prev_raw_input: torch.Tensor | None = None
     previous_raw_output: torch.Tensor | None = None
-    prev_prev_raw_output: torch.Tensor | None = None
+    last_full_input: torch.Tensor | None = None
     cache: torch.Tensor | None = None
+    residual_delta: torch.Tensor | None = None
 
 
 @dataclass
 class _PairState:
-    lazy_skip_remaining: int = 0
-    lazy_refresh_pending: bool = False
+    accumulated_error: float = 0.0
+    previous_error_score: float = 0.0
+    correction_scale: float = 1.0
+    transformation_rate: float | None = None
     last_decision: str = "calc"
     last_reason: str = "uninitialized"
-
-
-class LazyHorizonPredictor(nn.Module):
-    """Predict monotonic cumulative cache risk over a future horizon."""
-
-    FEATURE_DIM = FEATURE_DIM
-
-    def __init__(
-        self,
-        hidden_dim: int = 128,
-        num_hidden_layers: int = 3,
-        horizon: int = 4,
-        initial_prediction: float = 0.01,
-    ) -> None:
-        super().__init__()
-        if hidden_dim <= 0:
-            raise ValueError("hidden_dim must be positive")
-        if num_hidden_layers <= 0:
-            raise ValueError("num_hidden_layers must be positive")
-        if horizon <= 0:
-            raise ValueError("horizon must be positive")
-        if initial_prediction <= 0:
-            raise ValueError("initial_prediction must be positive")
-
-        self.horizon = int(horizon)
-        layers: list[nn.Module] = []
-        in_dim = self.FEATURE_DIM
-        for _ in range(num_hidden_layers):
-            layers.extend([nn.Linear(in_dim, hidden_dim), nn.SiLU()])
-            in_dim = hidden_dim
-        layers.append(nn.Linear(hidden_dim, self.horizon))
-        self.network = nn.Sequential(*layers)
-
-        for module in self.network.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.kaiming_normal_(module.weight, nonlinearity="relu")
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-
-        final_layer = self.network[-1]
-        assert isinstance(final_layer, nn.Linear)
-        nn.init.zeros_(final_layer.weight)
-        nn.init.constant_(final_layer.bias, math.log(math.expm1(initial_prediction)))
-
-    def forward(self, features: torch.Tensor) -> torch.Tensor:
-        increments = F.softplus(self.network(features))
-        return torch.cumsum(increments, dim=-1)
-
-
-def _safe_torch_load(path: str, device: torch.device) -> dict[str, Any]:
-    try:
-        payload = torch.load(path, map_location=device, weights_only=True)
-    except TypeError:
-        payload = torch.load(path, map_location=device)
-    if not isinstance(payload, dict):
-        raise RuntimeError("EasyCache checkpoint must contain a dictionary")
-    return payload
-
-
-def load_horizon_predictor(
-    checkpoint_path: str,
-    device: torch.device,
-    threshold_override: float | None,
-) -> tuple[LazyHorizonPredictor, torch.Tensor, float, dict[str, Any]]:
-    payload = _safe_torch_load(checkpoint_path, device)
-    required_keys = {
-        "raw_input_state_dict",
-        "horizon",
-        "threshold",
-        "calibration_offsets",
-        "target_contract",
-        "model_output_contract",
-        "args",
-    }
-    missing = sorted(required_keys.difference(payload))
-    if missing:
-        raise RuntimeError(
-            f"Use lazy_horizon_predictor_full.pt produced by train_lazy_cumulative_risk.py; missing keys: {missing}"
-        )
-
-    if payload["target_contract"] != EXPECTED_TARGET_CONTRACT:
-        raise RuntimeError(f"Checkpoint target contract mismatch: {payload['target_contract']!r}")
-    if payload["model_output_contract"] != EXPECTED_OUTPUT_CONTRACT:
-        raise RuntimeError(f"Checkpoint output contract mismatch: {payload['model_output_contract']!r}")
-    if int(payload.get("feature_dim", FEATURE_DIM)) != FEATURE_DIM:
-        raise RuntimeError("Checkpoint feature dimension must be 8")
-
-    training_args = payload["args"]
-    if not isinstance(training_args, dict):
-        raise RuntimeError("Checkpoint args metadata must be a dictionary")
-
-    horizon = int(payload["horizon"])
-    predictor = LazyHorizonPredictor(
-        hidden_dim=int(training_args.get("hidden_dim", 128)),
-        num_hidden_layers=int(training_args.get("num_hidden_layers", 3)),
-        horizon=horizon,
-        initial_prediction=float(training_args.get("initial_prediction", 0.01)),
-    ).to(device)
-    predictor.load_state_dict(payload["raw_input_state_dict"], strict=True)
-    predictor.eval()
-    predictor.requires_grad_(False)
-
-    calibration_offsets = torch.as_tensor(payload["calibration_offsets"], dtype=torch.float32, device=device).flatten()
-    if calibration_offsets.shape != (horizon,):
-        raise RuntimeError(f"calibration_offsets must have shape [{horizon}], got {tuple(calibration_offsets.shape)}")
-    if not torch.isfinite(calibration_offsets).all():
-        raise RuntimeError("calibration_offsets contain NaN or Inf")
-    if (calibration_offsets < 0).any():
-        raise RuntimeError("calibration_offsets must be non-negative")
-    calibration_offsets = torch.cummax(calibration_offsets, dim=0).values
-
-    threshold = float(payload["threshold"]) if threshold_override is None else float(threshold_override)
-    if not math.isfinite(threshold) or threshold <= 0:
-        raise ValueError("lazy_threshold must be finite and positive")
-
-    return predictor, calibration_offsets, threshold, payload
 
 
 def _tensor_l1_mean_scalar(tensor: torch.Tensor, other: torch.Tensor | None = None) -> torch.Tensor:
@@ -209,39 +99,28 @@ def _tensor_l1_mean_scalar(tensor: torch.Tensor, other: torch.Tensor | None = No
     return tensor.float().abs().mean()
 
 
-def tensor_l1_mean(tensor: torch.Tensor, other: torch.Tensor | None = None) -> float:
-    return float(_tensor_l1_mean_scalar(tensor, other).item())
-
-
-def longest_safe_prefix(cumulative_risk: torch.Tensor, threshold: float) -> int:
-    if cumulative_risk.ndim != 1:
-        raise ValueError("cumulative_risk must be one-dimensional")
-    # Preserve "stop at the first unsafe value" even for non-monotonic input,
-    # while reducing the device-to-host synchronization count to one.
-    safe_prefix_mask = torch.cumprod((cumulative_risk < threshold).to(torch.int32), dim=0)
-    return int(safe_prefix_mask.sum().item())
-
-
 class WanEasyCacheState:
     def __init__(
         self,
         *,
-        predictor: LazyHorizonPredictor,
-        calibration_offsets: torch.Tensor,
         threshold: float,
         warmup_steps: int,
         num_steps: int,
+        epsilon: float = DEFAULT_D2CACHE_EPSILON,
     ) -> None:
+        if not math.isfinite(threshold) or threshold <= 0:
+            raise ValueError("d2cache_threshold must be finite and positive")
         if warmup_steps < 0:
-            raise ValueError("lazy_warmup_steps must be non-negative")
-        self.predictor = predictor
-        self.calibration_offsets = calibration_offsets
-        self.threshold = threshold
-        self.warmup_steps = warmup_steps
-        self.num_steps = num_steps
+            raise ValueError("d2cache_warmup_steps must be non-negative")
+        if not math.isfinite(epsilon) or epsilon <= 0:
+            raise ValueError("d2cache_epsilon must be finite and positive")
+        self.threshold = float(threshold)
+        self.epsilon = float(epsilon)
+        self.warmup_steps = int(warmup_steps)
+        self.num_steps = int(num_steps)
         self.branch_states: dict[EasyCacheKey, _BranchState] = {}
         self.pair_states: dict[EasyCachePairKey, _PairState] = {}
-        self.stats = WanEasyCacheStats(prefix_histogram=[0 for _ in range(predictor.horizon + 1)])
+        self.stats = WanEasyCacheStats()
 
     def _branch_state(self, key: EasyCacheKey) -> _BranchState:
         state = self.branch_states.get(key)
@@ -266,86 +145,48 @@ class WanEasyCacheState:
             return uncond.cache is not None
         return True
 
-    def _build_features(
-        self,
-        *,
-        raw_input: torch.Tensor,
-        timestep_value: float | torch.Tensor,
-        step_idx: int,
-        pair_key: EasyCachePairKey,
-    ) -> torch.Tensor:
-        cond = self._branch_state((pair_key[0], pair_key[1], "cond"))
-        assert cond.previous_raw_input is not None
-        assert cond.previous_raw_output is not None
-        assert cond.cache is not None
-
-        zero = torch.zeros((), dtype=torch.float32, device=raw_input.device)
-        timestep_scalar = (
-            timestep_value.flatten()[0].to(device=raw_input.device, dtype=torch.float32)
-            if torch.is_tensor(timestep_value)
-            else torch.tensor(timestep_value, dtype=torch.float32, device=raw_input.device)
-        )
-        if cond.prev_prev_raw_input is None:
-            input_change_prev_scalar = zero
-            input_norm_prev_prev_scalar = zero
-        else:
-            input_change_prev_scalar = _tensor_l1_mean_scalar(cond.previous_raw_input, cond.prev_prev_raw_input)
-            input_norm_prev_prev_scalar = _tensor_l1_mean_scalar(cond.prev_prev_raw_input)
-        if cond.prev_prev_raw_output is None:
-            output_change_prev_scalar = zero
-            output_norm_prev_prev_scalar = zero
-        else:
-            output_change_prev_scalar = _tensor_l1_mean_scalar(cond.previous_raw_output, cond.prev_prev_raw_output)
-            output_norm_prev_prev_scalar = _tensor_l1_mean_scalar(cond.prev_prev_raw_output)
-
-        (
-            timestep_float,
-            input_change_curr,
-            input_norm_prev,
-            input_change_prev,
-            input_norm_prev_prev,
-            input_mean_curr,
-            output_change_prev,
-            output_norm_prev_prev,
-            cache_norm,
-        ) = torch.stack(
-            (
-                timestep_scalar,
-                _tensor_l1_mean_scalar(raw_input, cond.previous_raw_input),
-                _tensor_l1_mean_scalar(cond.previous_raw_input),
-                input_change_prev_scalar,
-                input_norm_prev_prev_scalar,
-                _tensor_l1_mean_scalar(raw_input),
-                output_change_prev_scalar,
-                output_norm_prev_prev_scalar,
-                _tensor_l1_mean_scalar(cond.cache),
+    def _pair_history_matches(self, pair_key: EasyCachePairKey, raw_input: torch.Tensor) -> bool:
+        branches: tuple[EasyCacheBranch, ...] = ("cond", "uncond")
+        for branch in branches:
+            state = self.branch_states.get((pair_key[0], pair_key[1], branch))
+            if state is None:
+                continue
+            stored_tensors = (
+                state.previous_raw_input,
+                state.previous_raw_output,
+                state.last_full_input,
+                state.cache,
+                state.residual_delta,
             )
-        ).tolist()
+            if any(tensor is not None and tensor.shape != raw_input.shape for tensor in stored_tensors):
+                return False
+        return True
 
-        input_change_curr_rel = input_change_curr / (input_norm_prev + 1e-8)
-        input_change_prev_rel = (
-            input_change_prev / (input_norm_prev_prev + 1e-8) if cond.prev_prev_raw_input is not None else 0.0
-        )
-        input_mean_prev = input_norm_prev
-        output_change_prev_rel = (
-            output_change_prev / (output_norm_prev_prev + 1e-8) if cond.prev_prev_raw_output is not None else 0.0
-        )
-        residual_norm = cache_norm / (input_mean_curr + 1e-8)
+    def _reset_pair(self, pair_key: EasyCachePairKey) -> None:
+        """Drop pair history after a latent-shape discontinuity.
 
-        return torch.tensor(
-            [
-                timestep_float / 1000.0,
-                input_change_curr_rel,
-                input_change_prev_rel,
-                input_mean_curr,
-                input_mean_prev,
-                output_change_prev_rel,
-                residual_norm,
-                step_idx / max(self.num_steps, 1),
-            ],
-            dtype=torch.float32,
-            device=self.calibration_offsets.device,
-        )
+        PipeFusion warmup runs full latents through key (transformer, 0) while
+        the async phase reuses the same key for patch latents; the old history
+        cannot be compared against or reused for the new shapes.
+        """
+        branches: tuple[EasyCacheBranch, ...] = ("cond", "uncond")
+        for branch in branches:
+            self.branch_states.pop((pair_key[0], pair_key[1], branch), None)
+        self.pair_states.pop(pair_key, None)
+
+    def _observe_conditional(self, key: EasyCacheKey, raw_input: torch.Tensor, output: torch.Tensor) -> None:
+        branch = self._branch_state(key)
+        if branch.previous_raw_output is not None and branch.last_full_input is not None:
+            output_change, input_change = torch.stack(
+                (
+                    _tensor_l1_mean_scalar(output, branch.previous_raw_output),
+                    _tensor_l1_mean_scalar(raw_input, branch.last_full_input),
+                )
+            ).tolist()
+            # The rate spans full-compute-to-full-compute pairs, so it is shared
+            # by both branches of the (transformer, patch) pair.
+            self._pair_state((key[0], key[1])).transformation_rate = output_change / (input_change + self.epsilon)
+        branch.last_full_input = raw_input.detach().clone()
 
     def should_skip_pair(
         self,
@@ -356,62 +197,76 @@ class WanEasyCacheState:
         step_idx: int,
         do_true_cfg: bool,
     ) -> bool:
+        del timestep_value
+        if not self._pair_history_matches(pair_key, raw_input):
+            self._reset_pair(pair_key)
         pair = self._pair_state(pair_key)
-        history_ready = self._history_ready(pair_key, do_true_cfg)
-        force_full_region = step_idx < self.warmup_steps or step_idx >= self.num_steps - 2
+        protected = step_idx < self.warmup_steps or step_idx >= self.num_steps - FINAL_FULL_STEPS
 
-        if force_full_region:
-            pair.lazy_skip_remaining = 0
-            pair.lazy_refresh_pending = False
+        if protected:
+            # Protected region: bank the assumed error and reset, never skip.
+            pair.previous_error_score = pair.accumulated_error
+            pair.accumulated_error = 0.0
             pair.last_decision = "calc"
             pair.last_reason = "warmup_or_final"
-        elif pair.lazy_skip_remaining > 0:
-            if not history_ready:
-                raise RuntimeError("A planned EasyCache skip cannot run because branch caches are missing")
-            pair.lazy_skip_remaining -= 1
-            pair.last_decision = "skip"
-            pair.last_reason = "planned_prefix"
-        elif pair.lazy_refresh_pending:
-            pair.lazy_refresh_pending = False
-            pair.last_decision = "calc"
-            pair.last_reason = "planned_refresh"
-        elif history_ready:
-            features = self._build_features(
-                raw_input=raw_input,
-                timestep_value=timestep_value,
-                step_idx=step_idx,
-                pair_key=pair_key,
-            )
-            with torch.no_grad():
-                raw_risk = self.predictor(features.unsqueeze(0))[0]
-                calibrated_risk = torch.cummax(raw_risk + self.calibration_offsets, dim=0).values
-
-            planned_prefix = longest_safe_prefix(calibrated_risk, self.threshold)
-            self.stats.prediction_count += 1
-            self.stats.prefix_histogram[planned_prefix] += 1
-            if planned_prefix > 0:
-                pair.lazy_skip_remaining = planned_prefix - 1
-                pair.lazy_refresh_pending = True
-                pair.last_decision = "skip"
-                pair.last_reason = "new_safe_prefix"
-                self.stats.plan_count += 1
-            else:
-                pair.lazy_skip_remaining = 0
-                pair.lazy_refresh_pending = False
-                pair.last_decision = "calc"
-                pair.last_reason = "zero_safe_prefix"
-                self.stats.zero_prefix_count += 1
-        else:
-            pair.lazy_skip_remaining = 0
-            pair.lazy_refresh_pending = False
+        elif not self._history_ready(pair_key, do_true_cfg):
             pair.last_decision = "calc"
             pair.last_reason = "history_not_ready"
+        elif pair.transformation_rate is None:
+            pair.last_decision = "calc"
+            pair.last_reason = "rate_unavailable"
+        else:
+            cond = self._branch_state((pair_key[0], pair_key[1], "cond"))
+            assert cond.previous_raw_input is not None
+            assert cond.previous_raw_output is not None
+            input_change, output_norm = torch.stack(
+                (
+                    _tensor_l1_mean_scalar(raw_input, cond.previous_raw_input),
+                    _tensor_l1_mean_scalar(cond.previous_raw_output),
+                )
+            ).tolist()
+            predicted_change = pair.transformation_rate * input_change / (output_norm + self.epsilon)
+            pair.accumulated_error += predicted_change
+            if pair.accumulated_error < self.threshold:
+                denominator = pair.previous_error_score if pair.previous_error_score != 0.0 else pair.accumulated_error
+                pair.correction_scale = pair.accumulated_error / denominator if denominator else 1.0
+                self.stats.correction_scale_sum += pair.correction_scale
+                self.stats.correction_scale_count += 1
+                pair.last_decision = "skip"
+                pair.last_reason = "within_threshold"
+            else:
+                pair.previous_error_score = pair.accumulated_error
+                pair.accumulated_error = 0.0
+                pair.correction_scale = 1.0
+                pair.last_decision = "calc"
+                pair.last_reason = "threshold_exceeded"
 
         if pair.last_decision == "skip":
             self.stats.skip_pairs += 1
             return True
         self.stats.calc_pairs += 1
         return False
+
+    def force_pair_calc(self, pair_key: EasyCachePairKey) -> None:
+        """Roll back a skip decision when a full compute is forced for this pair.
+
+        Used for the Rotational PipeFusion anchor patch, which must always run so
+        the next step's intermediate-tensor capture is fresh. Mirrors the
+        protected-region calc branch: bank the assumed error and reset.
+        """
+        pair = self._pair_state(pair_key)
+        if pair.last_decision != "skip":
+            return
+        pair.previous_error_score = pair.accumulated_error
+        pair.accumulated_error = 0.0
+        pair.last_decision = "calc"
+        pair.last_reason = "anchor_forced"
+        self.stats.skip_pairs -= 1
+        self.stats.calc_pairs += 1
+        self.stats.forced_calc_pairs += 1
+        if self.stats.correction_scale_count > 0:
+            self.stats.correction_scale_sum -= pair.correction_scale
+            self.stats.correction_scale_count -= 1
 
     def get_cached_output(
         self,
@@ -423,7 +278,15 @@ class WanEasyCacheState:
         if state.cache is None:
             raise RuntimeError(f"EasyCache branch cache is missing for {key}")
         self.stats.skip_forwards += 1
-        return raw_input + state.cache.to(device=raw_input.device)
+        if key[2] == "cond":
+            # A skipped pair still advances the conditional input history, which
+            # feeds the step-to-step input change of the next decision.
+            state.previous_raw_input = raw_input.detach().clone()
+        pair = self._pair_state((key[0], key[1]))
+        residual = state.cache
+        if state.residual_delta is not None:
+            residual = residual + pair.correction_scale * state.residual_delta
+        return raw_input + residual.to(device=raw_input.device)
 
     def update_branch(
         self,
@@ -436,26 +299,28 @@ class WanEasyCacheState:
             raise RuntimeError(
                 f"EasyCache raw_input/output shape mismatch: {tuple(raw_input.shape)} != {tuple(output.shape)}"
             )
+        pair_key = (key[0], key[1])
+        if not self._pair_history_matches(pair_key, raw_input):
+            self._reset_pair(pair_key)
         state = self._branch_state(key)
-        state.prev_prev_raw_input = state.previous_raw_input
-        state.previous_raw_input = raw_input.detach().clone()
-        state.prev_prev_raw_output = state.previous_raw_output
-        state.previous_raw_output = output.detach().clone()
+        if key[2] == "cond":
+            self._observe_conditional(key, raw_input, output)
         # Subtraction already returns fresh storage. Cloning that result again
         # adds a full-latent allocation and copy on every computed branch.
-        state.cache = output.detach() - raw_input.detach()
+        new_cache = output.detach() - raw_input.detach()
+        if state.cache is not None:
+            state.residual_delta = new_cache - state.cache
+        state.previous_raw_input = raw_input.detach().clone()
+        state.previous_raw_output = output.detach().clone()
+        state.cache = new_cache
         self.stats.calc_forwards += 1
 
 
 class WanEasyCacheMixin:
-    """Lazy-horizon EasyCache for Wan2.2 T2V/I2V, including PipeFusion PP skip sync."""
+    """D2Cache EasyCache for Wan2.2 T2V/I2V, including PipeFusion PP skip sync."""
 
     def _init_easycache_state(self) -> None:
         self._easycache_config = WanEasyCacheConfig()
-        self._easycache_loaded_signature: tuple[object, ...] | None = None
-        self._easycache_predictor = None
-        self._easycache_calibration_offsets = None
-        self._easycache_threshold: float | None = None
         self._easycache_state: WanEasyCacheState | None = None
         self._easycache_step_plan: dict[int, bool] | None = None
 
@@ -504,7 +369,10 @@ class WanEasyCacheMixin:
             step_i = step_idx - runtime.warmup_steps
             if runtime.use_rotational_pipefusion and step_i > 0:
                 anchor_pidx = runtime.get_last_stage_patch_indices(step_i - 1)[-1]
-                flags[patch_ids.index(anchor_pidx)] = 0
+                anchor_index = patch_ids.index(anchor_pidx)
+                if flags[anchor_index] == 1:
+                    flags[anchor_index] = 0
+                    state.force_pair_calc((transformer_id, anchor_pidx))
         get_pp_group().broadcast(flags, src=pp_size - 1)
         self._easycache_step_plan = {pidx: bool(flags[k]) for k, pidx in enumerate(patch_ids)}
 
@@ -538,11 +406,11 @@ class WanEasyCacheMixin:
         if not isinstance(extra_args, Mapping):
             raise TypeError("Wan2.2 EasyCache expects sampling_params.extra_args to be a mapping.")
         return {
-            "lazy_enabled": extra_args.get("lazy_enabled"),
-            "lazy_ckpt": extra_args.get("lazy_ckpt"),
-            "lazy_threshold": extra_args.get("lazy_threshold"),
-            "lazy_warmup_steps": extra_args.get("lazy_warmup_steps"),
-            "lazy_log_stats": extra_args.get("lazy_log_stats"),
+            "d2cache_enabled": extra_args.get("d2cache_enabled"),
+            "d2cache_threshold": extra_args.get("d2cache_threshold"),
+            "d2cache_warmup_steps": extra_args.get("d2cache_warmup_steps"),
+            "d2cache_epsilon": extra_args.get("d2cache_epsilon"),
+            "d2cache_log_stats": extra_args.get("d2cache_log_stats"),
         }
 
     def _resolve_easycache_config(self, sampling_params_list: list[Any]) -> WanEasyCacheConfig:
@@ -551,32 +419,36 @@ class WanEasyCacheMixin:
             if self._easycache_relevant_extra_args(sampling_params) != first_extra:
                 raise ValueError("Batched Wan2.2 requests must use identical EasyCache extra_args.")
 
-        enabled = self._truthy_extra_arg(first_extra["lazy_enabled"])
+        enabled = self._truthy_extra_arg(first_extra["d2cache_enabled"])
         if not enabled:
             return WanEasyCacheConfig()
 
-        checkpoint_path = first_extra["lazy_ckpt"]
-        if not checkpoint_path:
-            raise ValueError("Wan2.2 EasyCache requires extra_args['lazy_ckpt'] when lazy_enabled is true.")
-        if not isinstance(checkpoint_path, str):
-            raise TypeError("Wan2.2 EasyCache lazy_ckpt must be a string path.")
+        threshold = DEFAULT_D2CACHE_THRESHOLD
+        if first_extra["d2cache_threshold"] is not None:
+            threshold = float(first_extra["d2cache_threshold"])
+            if not math.isfinite(threshold) or threshold <= 0:
+                raise ValueError("Wan2.2 EasyCache d2cache_threshold must be finite and positive.")
 
-        threshold_override = first_extra["lazy_threshold"]
-        if threshold_override is not None:
-            threshold_override = float(threshold_override)
-            if not np.isfinite(threshold_override) or threshold_override <= 0:
-                raise ValueError("Wan2.2 EasyCache lazy_threshold must be finite and positive.")
-
-        warmup_steps = 7 if first_extra["lazy_warmup_steps"] is None else int(first_extra["lazy_warmup_steps"])
+        warmup_steps = (
+            DEFAULT_D2CACHE_WARMUP_STEPS
+            if first_extra["d2cache_warmup_steps"] is None
+            else int(first_extra["d2cache_warmup_steps"])
+        )
         if warmup_steps < 0:
-            raise ValueError("Wan2.2 EasyCache lazy_warmup_steps must be non-negative.")
+            raise ValueError("Wan2.2 EasyCache d2cache_warmup_steps must be non-negative.")
+
+        epsilon = DEFAULT_D2CACHE_EPSILON
+        if first_extra["d2cache_epsilon"] is not None:
+            epsilon = float(first_extra["d2cache_epsilon"])
+            if not math.isfinite(epsilon) or epsilon <= 0:
+                raise ValueError("Wan2.2 EasyCache d2cache_epsilon must be finite and positive.")
 
         return WanEasyCacheConfig(
             enabled=True,
-            checkpoint_path=checkpoint_path,
-            threshold_override=threshold_override,
+            threshold=threshold,
             warmup_steps=warmup_steps,
-            log_stats=self._truthy_extra_arg(first_extra["lazy_log_stats"]),
+            epsilon=epsilon,
+            log_stats=self._truthy_extra_arg(first_extra["d2cache_log_stats"]),
         )
 
     def _configure_easycache_for_request(self, sampling_params_list: list[Any], num_steps: int) -> None:
@@ -590,28 +462,12 @@ class WanEasyCacheMixin:
         if self._safe_cfg_parallel_world_size() > 1:
             raise NotImplementedError("Wan2.2 EasyCache does not yet support CFG parallel.")
 
-        assert config.checkpoint_path is not None
-        if getattr(self, "_easycache_loaded_signature", None) != config.signature:
-            predictor, calibration_offsets, threshold, _ = load_horizon_predictor(
-                config.checkpoint_path,
-                self.device,
-                config.threshold_override,
-            )
-            self._easycache_predictor = predictor
-            self._easycache_calibration_offsets = calibration_offsets
-            self._easycache_threshold = threshold
-            self._easycache_loaded_signature = config.signature
-
-        assert self._easycache_predictor is not None
-        assert self._easycache_calibration_offsets is not None
-        assert self._easycache_threshold is not None
         effective_warmup_steps = config.warmup_steps
         if is_pipefusion_initialized():
             effective_warmup_steps = max(effective_warmup_steps, get_pipefusion_runtime().warmup_steps)
         self._easycache_state = WanEasyCacheState(
-            predictor=self._easycache_predictor,
-            calibration_offsets=self._easycache_calibration_offsets,
-            threshold=self._easycache_threshold,
+            threshold=config.threshold,
+            epsilon=config.epsilon,
             warmup_steps=effective_warmup_steps,
             num_steps=num_steps,
         )
@@ -641,21 +497,18 @@ class WanEasyCacheMixin:
         total_pairs = stats.calc_pairs + stats.skip_pairs
         logger.info(
             "Wan2.2 EasyCache statistics: calc_pairs=%d, skip_pairs=%d, skip_ratio=%.2f%%, "
-            "predictions=%d, plans=%d, zero_prefix=%d, prefix_histogram=%s, "
-            "calc_forwards=%d, skip_forwards=%d",
+            "calc_forwards=%d, skip_forwards=%d, forced_calc_pairs=%d, mean_correction_scale=%.4f",
             stats.calc_pairs,
             stats.skip_pairs,
             100.0 * stats.skip_pairs / max(total_pairs, 1),
-            stats.prediction_count,
-            stats.plan_count,
-            stats.zero_prefix_count,
-            stats.prefix_histogram,
             stats.calc_forwards,
             stats.skip_forwards,
+            stats.forced_calc_pairs,
+            stats.mean_correction_scale,
         )
 
     def _release_easycache_request_state(self) -> None:
-        """Release per-request histories while retaining predictor weights."""
+        """Release per-request histories and plans."""
         self._easycache_state = None
         self._easycache_step_plan = None
 
