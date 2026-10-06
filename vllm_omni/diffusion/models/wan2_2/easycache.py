@@ -44,6 +44,64 @@ EasyCacheKey = tuple[str, int, EasyCacheBranch]
 EasyCachePairKey = tuple[str, int]
 
 
+def rotational_comm_unsafe_patches(
+    *,
+    pp_size: int,
+    num_patch: int,
+    num_async_steps: int,
+    step_i: int,
+) -> set[int]:
+    """Patches whose EasyCache skip would unbalance Rotational PipeFusion comms.
+
+    Under rotation a skip removes both the send and the recv that this
+    (step, patch) would trigger on every PP channel. On each channel
+    (stage r -> r+1) the sender and receiver only agree about those events
+    when ``entered(r) == would_recv(r+1)``:
+
+    - ``entered(r)``: stage r reaches predict() for this patch (false on the
+      rotation last position, and on the final async step for positions
+      ``x >= r+1`` due to the truncation rule).
+    - ``would_recv(r+1)``: stage r+1 posts the irecv (false on its
+      ``skip_recv`` positions: first patch at step i==1 for intermediate
+      stages, first patch at every step for the last stage).
+
+    When they disagree, skipping drops exactly one side of the FIFO pair and
+    the per-comm-id queue drifts: ``send > recv`` leaves an unsent-matched
+    isend that wedges ``_sync_pp_send()`` (rank0 SEND watchdog), while
+    ``send < recv`` starves a receiver (NCCL collective timeout). Such
+    positions must be forced to calc; positions where both sides agree keep
+    their skip and preserve the baseline FIFO pairing exactly.
+
+    ``step_i`` is the 0-based async step index (rotation is inactive at 0,
+    where this function returns no positions).
+    """
+    if pp_size <= 1 or num_patch <= 1 or num_async_steps <= 0 or step_i <= 0:
+        return set()
+    last_stage = pp_size - 1
+    is_final_step = step_i == num_async_steps - 1
+
+    def entered(r: int, x: int) -> bool:
+        if r == last_stage:
+            return True
+        if x == num_patch - 1:
+            return False
+        return not (is_final_step and x >= r + 1)
+
+    def would_recv(r: int, x: int) -> bool:
+        if not entered(r, x):
+            return False
+        return not (x == 0 and (r == last_stage or step_i == 1))
+
+    unsafe: set[int] = set()
+    for p in range(num_patch):
+        positions = [(p + r + step_i - 1) % num_patch for r in range(pp_size)]
+        for r in range(pp_size - 1):
+            if entered(r, positions[r]) != would_recv(r + 1, positions[r + 1]):
+                unsafe.add(p)
+                break
+    return unsafe
+
+
 @dataclass(frozen=True)
 class WanEasyCacheConfig:
     enabled: bool = False
@@ -247,12 +305,13 @@ class WanEasyCacheState:
         self.stats.calc_pairs += 1
         return False
 
-    def force_pair_calc(self, pair_key: EasyCachePairKey) -> None:
+    def force_pair_calc(self, pair_key: EasyCachePairKey, reason: str = "anchor_forced") -> None:
         """Roll back a skip decision when a full compute is forced for this pair.
 
-        Used for the Rotational PipeFusion anchor patch, which must always run so
-        the next step's intermediate-tensor capture is fresh. Mirrors the
-        protected-region calc branch: bank the assumed error and reset.
+        Used by the Rotational PipeFusion plan: the anchor patch must always run
+        so the next step's intermediate-tensor capture is fresh, and
+        comm-unsafe positions must run so per-comm-id FIFO queues stay balanced.
+        Mirrors the protected-region calc branch: bank the assumed error and reset.
         """
         pair = self._pair_state(pair_key)
         if pair.last_decision != "skip":
@@ -260,7 +319,7 @@ class WanEasyCacheState:
         pair.previous_error_score = pair.accumulated_error
         pair.accumulated_error = 0.0
         pair.last_decision = "calc"
-        pair.last_reason = "anchor_forced"
+        pair.last_reason = reason
         self.stats.skip_pairs -= 1
         self.stats.calc_pairs += 1
         self.stats.forced_calc_pairs += 1
@@ -338,7 +397,10 @@ class WanEasyCacheMixin:
         patches per step, so the per-pair skip broadcast inside
         predict_noise_maybe_with_easycache() would misalign across PP ranks.
         Call this once per denoising step before the patch loop; the resulting
-        plan is then consulted by patch id inside the loop.
+        plan is then consulted by patch id inside the loop. Besides the anchor
+        patch (last-stage IT capture source), the skip plan also forces calc
+        for comm-unsafe patches whose skip would unbalance the per-comm-id
+        send/recv FIFO; see rotational_comm_unsafe_patches().
         """
         state = getattr(self, "_easycache_state", None)
         pp_size = self._safe_pipeline_parallel_world_size()
@@ -373,6 +435,28 @@ class WanEasyCacheMixin:
                 if flags[anchor_index] == 1:
                     flags[anchor_index] = 0
                     state.force_pair_calc((transformer_id, anchor_pidx))
+
+                # Comm-unsafe patches: a skip there removes only one side of a
+                # send/recv pair on some channel (rotation last-position send,
+                # intermediate-stage `continue`, skip_recv, final-step
+                # truncation), which drifts the per-comm-id FIFO until the
+                # pipeline wedges (leftover isend at _sync_pp_send, or a
+                # starved irecv). Force these to calc; the remaining patches
+                # are symmetric on every channel and keep their skip with the
+                # baseline FIFO pairing intact.
+                unsafe_pidx = rotational_comm_unsafe_patches(
+                    pp_size=pp_size,
+                    num_patch=len(patch_ids),
+                    num_async_steps=state.num_steps - runtime.warmup_steps,
+                    step_i=step_i,
+                )
+                for pidx in sorted(unsafe_pidx):
+                    if pidx not in patch_ids:
+                        continue
+                    k = patch_ids.index(pidx)
+                    if flags[k] == 1:
+                        flags[k] = 0
+                        state.force_pair_calc((transformer_id, pidx), reason="comm_safe_forced")
         get_pp_group().broadcast(flags, src=pp_size - 1)
         self._easycache_step_plan = {pidx: bool(flags[k]) for k, pidx in enumerate(patch_ids)}
 
