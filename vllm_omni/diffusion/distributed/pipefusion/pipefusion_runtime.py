@@ -14,7 +14,8 @@ and transformer mixins.
 
 from __future__ import annotations
 
-from typing import Literal
+import os
+from typing import Literal, cast
 
 import torch
 from vllm.logger import init_logger
@@ -98,7 +99,7 @@ class PipeFusionRuntime:
         if split_dim is not None:
             if split_dim not in ("height", "temporal"):
                 raise ValueError(f"Invalid PipeFusion split_dim: {split_dim!r}. Must be 'height' or 'temporal'.")
-            self.split_dim = split_dim
+            self.split_dim = cast(Literal["height", "temporal"], split_dim)
         if use_rotational_pipefusion is not None:
             self.use_rotational_pipefusion = use_rotational_pipefusion
 
@@ -133,10 +134,37 @@ class PipeFusionRuntime:
             else is_last_patch
         )
 
+    @staticmethod
+    def resolve_num_pipeline_patch() -> int:
+        """Number of PipeFusion micro-batches processed per denoising step.
+
+        Defaults to the pipeline-parallel world size (one patch per stage).
+        ``VLLM_OMNI_PF_NUM_PATCH`` (positive integer) decouples the micro-batch
+        count from the stage count, so e.g. a 2-stage pipeline can refill its
+        pipeline with 4-8 patches instead of 2 and amortize the per-step refill
+        bubble. Must be identical across PP ranks (it comes from the process
+        environment, so it is).
+        """
+        raw = os.environ.get("VLLM_OMNI_PF_NUM_PATCH", "").strip()
+        if not raw:
+            return get_pipeline_parallel_world_size()
+        try:
+            num_patch = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"VLLM_OMNI_PF_NUM_PATCH must be a positive integer, got {raw!r}.") from exc
+        if num_patch < 1:
+            raise ValueError(f"VLLM_OMNI_PF_NUM_PATCH must be a positive integer, got {num_patch}.")
+        return num_patch
+
     def _calc_patch_metadata(self, seq_length):
         lengths = [seq_length // self.num_pipeline_patch] * (self.num_pipeline_patch - 1)
         # Give more tokens to the last patch, if it's the case.
         lengths.append(seq_length // self.num_pipeline_patch + seq_length % self.num_pipeline_patch)
+        if lengths and min(lengths) < 1:
+            raise ValueError(
+                f"num_pipeline_patch={self.num_pipeline_patch} cannot split {seq_length} units; "
+                "lower VLLM_OMNI_PF_NUM_PATCH or use a larger shape/split_dim."
+            )
         start = 0
         start_end_idx = []
         for num in lengths:
@@ -145,7 +173,7 @@ class PipeFusionRuntime:
         return lengths, start_end_idx
 
     def _calc_patches_metadata(self, latents):
-        self.num_pipeline_patch = get_pipeline_parallel_world_size()
+        self.num_pipeline_patch = self.resolve_num_pipeline_patch()
 
         p_t, p_h, p_w = self.patch_size
         ppf = latents.size(-3) // p_t  # post-patch frames

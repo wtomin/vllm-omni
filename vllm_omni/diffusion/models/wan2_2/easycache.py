@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping
+import time
+from collections import defaultdict
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -22,16 +25,60 @@ from vllm.sequence import IntermediateTensors
 
 from vllm_omni.diffusion.distributed.parallel_state import (
     get_classifier_free_guidance_world_size,
+    get_pipeline_parallel_rank,
     get_pipeline_parallel_world_size,
     get_pp_group,
+    is_pipeline_first_stage,
     is_pipeline_last_stage,
 )
 from vllm_omni.diffusion.distributed.pipefusion.pipefusion_runtime import (
     get_pipefusion_runtime,
     is_pipefusion_initialized,
 )
+from vllm_omni.diffusion.models.wan2_2.it_residual_cache import ITResidualCache
 
 logger = logging.getLogger(__name__)
+
+# Host-side wall-clock attribution for the cache decision path. Each span
+# measures time the host thread spent inside that region, so a `.tolist()` /
+# `bool(tensor)` span includes the GPU queue drain it forces. Spans nest
+# (`plan_total` >= `plan_decide` >= `decide_sync`); sum only the top-level ones.
+_EC_PROF: dict[str, float] = defaultdict(float)
+_EC_PROF_N: dict[str, int] = defaultdict(int)
+_EC_PROF_KEYS = (
+    "plan_total",
+    "plan_decide",
+    "decide_sync",
+    "force_calc",
+    "force_rollback",
+    "plan_bcast",
+    "plan_elide",
+    "plan_flags",
+    "observe",
+    "update_branch",
+    "get_cached",
+    "predict_prep",
+)
+
+
+@contextmanager
+def _ec_span(name: str) -> Iterator[None]:
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        _EC_PROF[name] += time.perf_counter() - start
+        _EC_PROF_N[name] += 1
+
+
+def _reset_ec_prof() -> None:
+    _EC_PROF.clear()
+    _EC_PROF_N.clear()
+
+
+def _format_ec_prof() -> str:
+    return " ".join(f"{key}={_EC_PROF[key]:.3f}({_EC_PROF_N[key]})" for key in _EC_PROF_KEYS)
+
 
 DEFAULT_D2CACHE_THRESHOLD = 0.05
 DEFAULT_D2CACHE_WARMUP_STEPS = 7
@@ -102,6 +149,33 @@ def rotational_comm_unsafe_patches(
     return unsafe
 
 
+def rotational_nonlast_predicted_patches(*, pp_size: int, num_patch: int, step_i: int) -> set[int]:
+    """Patches a non-last PP stage may enter at async step ``step_i`` (over-approximation).
+
+    Mirrors ``PipeFusion._async_pipeline``: rotation is inactive at
+    ``step_i == 0``, where every stage runs every patch, and from
+    ``step_i == 1`` on each rank walks its rotationally shifted order (the same
+    ``patch_indices[-shift:] + patch_indices[:-shift]`` roll as
+    ``get_initial_patch_indices()``, rolled right once per step) and runs all
+    of it except its own last position, which ``skip_patch`` drops for first
+    and intermediate stages alike. The final-step truncation rule drops further
+    positions, so this is a superset of what is really entered -- the direction
+    the plan-handshake subset test needs: proving the superset is a guaranteed
+    calc proves the truth is too.
+    """
+    if pp_size <= 1:
+        return set()
+    if step_i <= 0:
+        return set(range(num_patch))
+    predicted: set[int] = set()
+    for rank in range(pp_size - 1):
+        shift = (rank % num_patch + step_i - 1) % num_patch
+        order = list(range(num_patch))
+        order = order[-shift:] + order[:-shift]
+        predicted.update(order[:-1])
+    return predicted
+
+
 @dataclass(frozen=True)
 class WanEasyCacheConfig:
     enabled: bool = False
@@ -109,6 +183,20 @@ class WanEasyCacheConfig:
     warmup_steps: int = DEFAULT_D2CACHE_WARMUP_STEPS
     epsilon: float = DEFAULT_D2CACHE_EPSILON
     log_stats: bool = False
+    # Force the Rotational PipeFusion anchor patch to compute so the next step
+    # always gets freshly captured intermediate tensors. Turning this off lets
+    # the anchor skip and reuses the previously captured (staler) tensors; it
+    # raises the skip ceiling but also disables the plan-handshake elision,
+    # which depends on the anchor being a proven calc. See
+    # WanEasyCacheMixin._plan_easycache_step.
+    force_anchor_calc: bool = True
+    # First-stage intermediate-tensor residual cache: let the first PP rank elide
+    # its own block stack and predict the intermediate tensor instead. This is
+    # transport-neutral, so unlike the latent-space skip it needs no cross-rank
+    # handshake, no anchor force and no comm-unsafe scan.
+    it_residual_enabled: bool = False
+    it_residual_threshold: float | None = None
+    it_residual_second_order: bool = False
 
 
 @dataclass
@@ -142,7 +230,8 @@ class _PairState:
     accumulated_error: float = 0.0
     previous_error_score: float = 0.0
     correction_scale: float = 1.0
-    transformation_rate: float | None = None
+    # Device 0-dim tensor: a host read here costs one full GPU sync per patch.
+    transformation_rate: torch.Tensor | None = None
     last_decision: str = "calc"
     last_reason: str = "uninitialized"
 
@@ -233,18 +322,17 @@ class WanEasyCacheState:
         self.pair_states.pop(pair_key, None)
 
     def _observe_conditional(self, key: EasyCacheKey, raw_input: torch.Tensor, output: torch.Tensor) -> None:
-        branch = self._branch_state(key)
-        if branch.previous_raw_output is not None and branch.last_full_input is not None:
-            output_change, input_change = torch.stack(
-                (
-                    _tensor_l1_mean_scalar(output, branch.previous_raw_output),
-                    _tensor_l1_mean_scalar(raw_input, branch.last_full_input),
-                )
-            ).tolist()
-            # The rate spans full-compute-to-full-compute pairs, so it is shared
-            # by both branches of the (transformer, patch) pair.
-            self._pair_state((key[0], key[1])).transformation_rate = output_change / (input_change + self.epsilon)
-        branch.last_full_input = raw_input.detach().clone()
+        with _ec_span("observe"):
+            branch = self._branch_state(key)
+            if branch.previous_raw_output is not None and branch.last_full_input is not None:
+                # Stay on the device: reading these back would sync once per patch
+                # (95x/prompt here) and dominates the decision-path overhead.
+                output_change = _tensor_l1_mean_scalar(output, branch.previous_raw_output)
+                input_change = _tensor_l1_mean_scalar(raw_input, branch.last_full_input)
+                # The rate spans full-compute-to-full-compute pairs, so it is shared
+                # by both branches of the (transformer, patch) pair.
+                self._pair_state((key[0], key[1])).transformation_rate = output_change / (input_change + self.epsilon)
+            branch.last_full_input = raw_input.detach().clone()
 
     def should_skip_pair(
         self,
@@ -277,14 +365,16 @@ class WanEasyCacheState:
             cond = self._branch_state((pair_key[0], pair_key[1], "cond"))
             assert cond.previous_raw_input is not None
             assert cond.previous_raw_output is not None
-            input_change, output_norm = torch.stack(
-                (
-                    _tensor_l1_mean_scalar(raw_input, cond.previous_raw_input),
-                    _tensor_l1_mean_scalar(cond.previous_raw_output),
-                )
-            ).tolist()
-            predicted_change = pair.transformation_rate * input_change / (output_norm + self.epsilon)
-            pair.accumulated_error += predicted_change
+            rate = pair.transformation_rate
+            assert rate is not None
+            with _ec_span("decide_sync"):
+                input_change = _tensor_l1_mean_scalar(raw_input, cond.previous_raw_input)
+                output_norm = _tensor_l1_mean_scalar(cond.previous_raw_output)
+                # One host read for the whole decision: predicted_change is the only
+                # value the accumulated-error bookkeeping needs as a Python float.
+                predicted_change = rate * input_change / (output_norm + self.epsilon)
+                predicted_value = predicted_change.item()
+            pair.accumulated_error += float(predicted_value)
             if pair.accumulated_error < self.threshold:
                 denominator = pair.previous_error_score if pair.previous_error_score != 0.0 else pair.accumulated_error
                 pair.correction_scale = pair.accumulated_error / denominator if denominator else 1.0
@@ -316,16 +406,17 @@ class WanEasyCacheState:
         pair = self._pair_state(pair_key)
         if pair.last_decision != "skip":
             return
-        pair.previous_error_score = pair.accumulated_error
-        pair.accumulated_error = 0.0
-        pair.last_decision = "calc"
-        pair.last_reason = reason
-        self.stats.skip_pairs -= 1
-        self.stats.calc_pairs += 1
-        self.stats.forced_calc_pairs += 1
-        if self.stats.correction_scale_count > 0:
-            self.stats.correction_scale_sum -= pair.correction_scale
-            self.stats.correction_scale_count -= 1
+        with _ec_span("force_rollback"):
+            pair.previous_error_score = pair.accumulated_error
+            pair.accumulated_error = 0.0
+            pair.last_decision = "calc"
+            pair.last_reason = reason
+            self.stats.skip_pairs -= 1
+            self.stats.calc_pairs += 1
+            self.stats.forced_calc_pairs += 1
+            if self.stats.correction_scale_count > 0:
+                self.stats.correction_scale_sum -= pair.correction_scale
+                self.stats.correction_scale_count -= 1
 
     def get_cached_output(
         self,
@@ -336,16 +427,17 @@ class WanEasyCacheState:
         state = self._branch_state(key)
         if state.cache is None:
             raise RuntimeError(f"EasyCache branch cache is missing for {key}")
-        self.stats.skip_forwards += 1
-        if key[2] == "cond":
-            # A skipped pair still advances the conditional input history, which
-            # feeds the step-to-step input change of the next decision.
-            state.previous_raw_input = raw_input.detach().clone()
-        pair = self._pair_state((key[0], key[1]))
-        residual = state.cache
-        if state.residual_delta is not None:
-            residual = residual + pair.correction_scale * state.residual_delta
-        return raw_input + residual.to(device=raw_input.device)
+        with _ec_span("get_cached"):
+            self.stats.skip_forwards += 1
+            if key[2] == "cond":
+                # A skipped pair still advances the conditional input history, which
+                # feeds the step-to-step input change of the next decision.
+                state.previous_raw_input = raw_input.detach().clone()
+            pair = self._pair_state((key[0], key[1]))
+            residual = state.cache
+            if state.residual_delta is not None:
+                residual = residual + pair.correction_scale * state.residual_delta
+            return raw_input + residual.to(device=raw_input.device)
 
     def update_branch(
         self,
@@ -354,25 +446,26 @@ class WanEasyCacheState:
         raw_input: torch.Tensor,
         output: torch.Tensor,
     ) -> None:
-        if raw_input.shape != output.shape:
-            raise RuntimeError(
-                f"EasyCache raw_input/output shape mismatch: {tuple(raw_input.shape)} != {tuple(output.shape)}"
-            )
-        pair_key = (key[0], key[1])
-        if not self._pair_history_matches(pair_key, raw_input):
-            self._reset_pair(pair_key)
-        state = self._branch_state(key)
-        if key[2] == "cond":
-            self._observe_conditional(key, raw_input, output)
-        # Subtraction already returns fresh storage. Cloning that result again
-        # adds a full-latent allocation and copy on every computed branch.
-        new_cache = output.detach() - raw_input.detach()
-        if state.cache is not None:
-            state.residual_delta = new_cache - state.cache
-        state.previous_raw_input = raw_input.detach().clone()
-        state.previous_raw_output = output.detach().clone()
-        state.cache = new_cache
-        self.stats.calc_forwards += 1
+        with _ec_span("update_branch"):
+            if raw_input.shape != output.shape:
+                raise RuntimeError(
+                    f"EasyCache raw_input/output shape mismatch: {tuple(raw_input.shape)} != {tuple(output.shape)}"
+                )
+            pair_key = (key[0], key[1])
+            if not self._pair_history_matches(pair_key, raw_input):
+                self._reset_pair(pair_key)
+            state = self._branch_state(key)
+            if key[2] == "cond":
+                self._observe_conditional(key, raw_input, output)
+            # Subtraction already returns fresh storage. Cloning that result again
+            # adds a full-latent allocation and copy on every computed branch.
+            new_cache = output.detach() - raw_input.detach()
+            if state.cache is not None:
+                state.residual_delta = new_cache - state.cache
+            state.previous_raw_input = raw_input.detach().clone()
+            state.previous_raw_output = output.detach().clone()
+            state.cache = new_cache
+            self.stats.calc_forwards += 1
 
 
 class WanEasyCacheMixin:
@@ -382,6 +475,7 @@ class WanEasyCacheMixin:
         self._easycache_config = WanEasyCacheConfig()
         self._easycache_state: WanEasyCacheState | None = None
         self._easycache_step_plan: dict[int, bool] | None = None
+        self._easycache_it_cache: ITResidualCache | None = None
 
     def plan_easycache_step(
         self,
@@ -401,7 +495,23 @@ class WanEasyCacheMixin:
         patch (last-stage IT capture source), the skip plan also forces calc
         for comm-unsafe patches whose skip would unbalance the per-comm-id
         send/recv FIFO; see rotational_comm_unsafe_patches().
+
+        The broadcast is skipped whenever every patch a non-last stage may run
+        this step is already a proven calc on the last stage (protected region,
+        anchor force, or comm-unsafe force): that stage holds the matching
+        all-zero flags locally, and a rendezvous whose only payload is "you
+        compute" costs ~2.6 s over 45 steps while the stage computes anyway.
         """
+        with _ec_span("plan_total"):
+            self._plan_easycache_step(raw_inputs, step_idx, do_true_cfg, transformer_id)
+
+    def _plan_easycache_step(
+        self,
+        raw_inputs: dict[int, torch.Tensor],
+        step_idx: int,
+        do_true_cfg: bool,
+        transformer_id: str = "transformer",
+    ) -> None:
         state = getattr(self, "_easycache_state", None)
         pp_size = self._safe_pipeline_parallel_world_size()
         self._easycache_step_plan = None
@@ -409,56 +519,105 @@ class WanEasyCacheMixin:
             return
         patch_ids = sorted(raw_inputs.keys())
         flags = torch.zeros(len(patch_ids), dtype=torch.int32, device=self.device)
-        if is_pipeline_last_stage():
-            timestep = self._current_timestep
-            # should_skip_pair accepts a float or a tensor timestep.
-            timestep_value = 0.0 if timestep is None else timestep
-            for k, pidx in enumerate(patch_ids):
-                if state.should_skip_pair(
-                    pair_key=(transformer_id, pidx),
-                    raw_input=raw_inputs[pidx],
-                    timestep_value=timestep_value,
-                    step_idx=step_idx,
-                    do_true_cfg=do_true_cfg,
-                ):
-                    flags[k] = 1
-            # Rotational PipeFusion feeds the last stage's last-patch intermediate
-            # tensors (captured while computing this step's anchor patch) into the
-            # next step's first patch. If EasyCache skipped the anchor patch, the
-            # capture would be empty/stale and the next step would reuse mismatched
-            # tensors, so the anchor patch is forced to always calc.
+        # Rotational PipeFusion feeds the last stage's last-patch intermediate
+        # tensors (captured while computing this step's anchor patch) into the
+        # next step's first patch. Skipping the anchor leaves nothing fresh to
+        # capture, so the anchor is normally forced to calc.
+        #
+        # ``force_anchor_calc=False`` drops that force and lets
+        # ``PipeFusion._async_pipeline``'s stash/restore fallback carry the
+        # skipped step instead (it reuses the last captured ITs, one step
+        # staler). That lifts the skip ceiling -- at pp=2/num_patch=2 the anchor
+        # is 1 of only 2 patches, so the force alone caps skipping at ~43% --
+        # but it has a hard coupling to the handshake elision below: the elide
+        # proof is "every patch a non-last stage runs is a proven calc", and the
+        # anchor is exactly the patch the first stage runs. Drop the force and
+        # the anchor leaves ``guaranteed_calc``, the elide stops firing, and the
+        # per-step cross-rank barrier returns. Both are derived from the same
+        # ``force_anchor_calc`` so the elide can never silently claim a proof it
+        # no longer has.
+        #
+        # Comm-unsafe patches stay forced unconditionally: a skip there drops
+        # one side of a per-comm-id send/recv pair and wedges the pipeline.
+        # Both sets are pure geometry, so every rank derives them locally.
+        # ``step_i < 0`` (no PipeFusion runtime) leaves them empty and makes the
+        # subset test fall back to a handshake on every unprotected step.
+        anchor_pidx: int | None = None
+        unsafe_pidx: set[int] = set()
+        step_i = -1
+        force_anchor_calc = self._easycache_force_anchor_calc()
+        if is_pipefusion_initialized():
             runtime = get_pipefusion_runtime()
             step_i = step_idx - runtime.warmup_steps
             if runtime.use_rotational_pipefusion and step_i > 0:
                 anchor_pidx = runtime.get_last_stage_patch_indices(step_i - 1)[-1]
-                anchor_index = patch_ids.index(anchor_pidx)
-                if flags[anchor_index] == 1:
-                    flags[anchor_index] = 0
-                    state.force_pair_calc((transformer_id, anchor_pidx))
+                unsafe_pidx = {
+                    pidx
+                    for pidx in rotational_comm_unsafe_patches(
+                        pp_size=pp_size,
+                        num_patch=len(patch_ids),
+                        num_async_steps=state.num_steps - runtime.warmup_steps,
+                        step_i=step_i,
+                    )
+                    if pidx in patch_ids
+                }
+        if is_pipeline_last_stage():
+            timestep = self._current_timestep
+            # should_skip_pair accepts a float or a tensor timestep.
+            timestep_value = 0.0 if timestep is None else timestep
+            with _ec_span("plan_decide"):
+                for k, pidx in enumerate(patch_ids):
+                    if state.should_skip_pair(
+                        pair_key=(transformer_id, pidx),
+                        raw_input=raw_inputs[pidx],
+                        timestep_value=timestep_value,
+                        step_idx=step_idx,
+                        do_true_cfg=do_true_cfg,
+                    ):
+                        flags[k] = 1
+            with _ec_span("force_calc"):
+                if anchor_pidx is not None and force_anchor_calc:
+                    anchor_index = patch_ids.index(anchor_pidx)
+                    if flags[anchor_index] == 1:
+                        flags[anchor_index] = 0
+                        state.force_pair_calc((transformer_id, anchor_pidx))
 
-                # Comm-unsafe patches: a skip there removes only one side of a
-                # send/recv pair on some channel (rotation last-position send,
-                # intermediate-stage `continue`, skip_recv, final-step
-                # truncation), which drifts the per-comm-id FIFO until the
-                # pipeline wedges (leftover isend at _sync_pp_send, or a
-                # starved irecv). Force these to calc; the remaining patches
-                # are symmetric on every channel and keep their skip with the
-                # baseline FIFO pairing intact.
-                unsafe_pidx = rotational_comm_unsafe_patches(
-                    pp_size=pp_size,
-                    num_patch=len(patch_ids),
-                    num_async_steps=state.num_steps - runtime.warmup_steps,
-                    step_i=step_i,
-                )
+                # See rotational_comm_unsafe_patches(): a skip there removes
+                # only one side of a send/recv pair on some channel and
+                # drifts the per-comm-id FIFO until the pipeline wedges.
                 for pidx in sorted(unsafe_pidx):
-                    if pidx not in patch_ids:
-                        continue
                     k = patch_ids.index(pidx)
                     if flags[k] == 1:
                         flags[k] = 0
                         state.force_pair_calc((transformer_id, pidx), reason="comm_safe_forced")
-        get_pp_group().broadcast(flags, src=pp_size - 1)
-        self._easycache_step_plan = {pidx: bool(flags[k]) for k, pidx in enumerate(patch_ids)}
+        # A non-last stage never decides: it allocates an all-zero flags buffer
+        # and only consumes the broadcast. So the handshake is worth one
+        # cross-rank rendezvous per step only when it can answer something the
+        # receiving rank cannot already prove, which is exactly the case that
+        # matters here: the first stage runs the anchor patch, and telling it
+        # "you compute" costs ~2.6 s over 45 steps while it computes anyway.
+        # Every patch a non-last stage may run is then a proven calc on the
+        # last stage -- protected region, an active anchor force, or a
+        # comm-unsafe force -- and the local all-zero flags already hold that
+        # value. With the anchor force off, the anchor's real decision is only
+        # known on the last stage, so the proof is gone and we must broadcast.
+        protected = step_idx < state.warmup_steps or step_idx >= state.num_steps - FINAL_FULL_STEPS
+        guaranteed_calc = set(patch_ids) if protected else set()
+        if force_anchor_calc and anchor_pidx is not None and anchor_pidx in patch_ids:
+            guaranteed_calc.add(anchor_pidx)
+        guaranteed_calc |= unsafe_pidx
+        elide_bcast = (
+            rotational_nonlast_predicted_patches(pp_size=pp_size, num_patch=len(patch_ids), step_i=step_i)
+            <= guaranteed_calc
+        )
+        with _ec_span("plan_bcast"):
+            if elide_bcast:
+                _EC_PROF["plan_elide"] += 1.0
+                _EC_PROF_N["plan_elide"] += 1
+            else:
+                get_pp_group().broadcast(flags, src=pp_size - 1)
+        with _ec_span("plan_flags"):
+            self._easycache_step_plan = {pidx: bool(flags[k]) for k, pidx in enumerate(patch_ids)}
 
     @staticmethod
     def _truthy_extra_arg(value: object, *, default: bool = False) -> bool:
@@ -469,6 +628,66 @@ class WanEasyCacheMixin:
         if isinstance(value, str):
             return value.strip().lower() in {"1", "true", "yes", "y", "on"}
         return bool(value)
+
+    def _easycache_force_anchor_calc(self) -> bool:
+        config = getattr(self, "_easycache_config", WanEasyCacheConfig())
+        return bool(config.force_anchor_calc)
+
+    # ------------------------------------------------------------------
+    # First-stage intermediate-tensor residual cache
+    # ------------------------------------------------------------------
+
+    def _it_residual_cache_active(self) -> bool:
+        """The IT cache only makes sense for a multi-stage first PP rank.
+
+        With ``pipeline_parallel_size == 1`` the first stage is also the last, so
+        there is no intermediate tensor to reconstruct and the latent-space
+        cache in :class:`WanEasyCacheState` already covers it.
+        """
+        if not self._easycache_config.it_residual_enabled:
+            return False
+        if self._safe_pipeline_parallel_world_size() <= 1:
+            return False
+        state = getattr(self, "_easycache_state", None)
+        return state is not None
+
+    def _attach_it_residual_cache(
+        self,
+        *,
+        positive_kwargs: dict[str, Any],
+        negative_kwargs: dict[str, Any] | None,
+        transformer_id: str,
+        patch_id: int,
+        step_idx: int,
+        do_true_cfg: bool,
+    ) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        """Inject the IT-cache hooks into the CFG branch kwargs.
+
+        Each CFG branch gets its own cache entry because cond and uncond run
+        different attention inputs through the same block stack, so their
+        residuals differ.
+        """
+        if not self._it_residual_cache_active():
+            return positive_kwargs, negative_kwargs
+        cache = self._easycache_it_cache
+        assert cache is not None
+        protected = step_idx < self._easycache_state.warmup_steps or step_idx >= (
+            self._easycache_state.num_steps - FINAL_FULL_STEPS
+        )
+        positive_kwargs = {
+            **positive_kwargs,
+            "it_residual_cache": cache,
+            "it_residual_key": (transformer_id, patch_id, "cond"),
+            "it_residual_protected": protected,
+        }
+        if do_true_cfg and negative_kwargs is not None:
+            negative_kwargs = {
+                **negative_kwargs,
+                "it_residual_cache": cache,
+                "it_residual_key": (transformer_id, patch_id, "uncond"),
+                "it_residual_protected": protected,
+            }
+        return positive_kwargs, negative_kwargs
 
     @staticmethod
     def _safe_pipeline_parallel_world_size() -> int:
@@ -495,6 +714,10 @@ class WanEasyCacheMixin:
             "d2cache_warmup_steps": extra_args.get("d2cache_warmup_steps"),
             "d2cache_epsilon": extra_args.get("d2cache_epsilon"),
             "d2cache_log_stats": extra_args.get("d2cache_log_stats"),
+            "d2cache_force_anchor_calc": extra_args.get("d2cache_force_anchor_calc"),
+            "it_residual_enabled": extra_args.get("it_residual_enabled"),
+            "it_residual_threshold": extra_args.get("it_residual_threshold"),
+            "it_residual_second_order": extra_args.get("it_residual_second_order"),
         }
 
     def _resolve_easycache_config(self, sampling_params_list: list[Any]) -> WanEasyCacheConfig:
@@ -527,15 +750,30 @@ class WanEasyCacheMixin:
             if not math.isfinite(epsilon) or epsilon <= 0:
                 raise ValueError("Wan2.2 EasyCache d2cache_epsilon must be finite and positive.")
 
+        # tri-state: absent -> keep the conservative default (anchor forced).
+        force_anchor_raw = first_extra["d2cache_force_anchor_calc"]
+        force_anchor_calc = True if force_anchor_raw is None else self._truthy_extra_arg(force_anchor_raw)
+
+        it_residual_threshold = None
+        if first_extra["it_residual_threshold"] is not None:
+            it_residual_threshold = float(first_extra["it_residual_threshold"])
+            if not math.isfinite(it_residual_threshold) or it_residual_threshold <= 0:
+                raise ValueError("Wan2.2 EasyCache it_residual_threshold must be finite and positive.")
+
         return WanEasyCacheConfig(
             enabled=True,
             threshold=threshold,
             warmup_steps=warmup_steps,
             epsilon=epsilon,
             log_stats=self._truthy_extra_arg(first_extra["d2cache_log_stats"]),
+            force_anchor_calc=force_anchor_calc,
+            it_residual_enabled=self._truthy_extra_arg(first_extra["it_residual_enabled"]),
+            it_residual_threshold=it_residual_threshold,
+            it_residual_second_order=self._truthy_extra_arg(first_extra["it_residual_second_order"]),
         )
 
     def _configure_easycache_for_request(self, sampling_params_list: list[Any], num_steps: int) -> None:
+        _reset_ec_prof()
         config = self._resolve_easycache_config(sampling_params_list)
         self._easycache_config = config
         self._easycache_state = None
@@ -555,6 +793,26 @@ class WanEasyCacheMixin:
             warmup_steps=effective_warmup_steps,
             num_steps=num_steps,
         )
+        self._easycache_it_cache = None
+        if config.it_residual_enabled and self._safe_pipeline_parallel_world_size() > 1:
+            self._easycache_it_cache = ITResidualCache(
+                threshold=config.it_residual_threshold
+                if config.it_residual_threshold is not None
+                else config.threshold,
+                epsilon=config.epsilon,
+                second_order=config.it_residual_second_order,
+            )
+            if self._easycache_on_first_stage():
+                cache = self._easycache_it_cache
+                logger.info(
+                    "Wan2.2 IT residual cache on: threshold=%g second_order=%s tensors_per_entry=%d "
+                    "(residual + previous block input%s). Resident bytes = "
+                    "num_transformers * num_patches * num_branches * tensors_per_entry * it_bytes.",
+                    cache.threshold,
+                    cache.second_order,
+                    cache.tensors_per_entry(),
+                    " + residual_delta" if cache.second_order else "",
+                )
 
     def _easycache_transformer_id(self, positive_kwargs: dict[str, Any]) -> str:
         current_model = positive_kwargs.get("current_model")
@@ -570,11 +828,33 @@ class WanEasyCacheMixin:
                 return int(runtime.pipeline_patch_idx)
         return 0
 
+    def _easycache_on_first_stage(self) -> bool:
+        try:
+            return is_pipeline_first_stage()
+        except AssertionError:
+            return True
+
     def _log_easycache_stats(self) -> None:
         state = getattr(self, "_easycache_state", None)
         config = getattr(self, "_easycache_config", WanEasyCacheConfig())
+        it_cache = getattr(self, "_easycache_it_cache", None)
+        if it_cache is not None and config.log_stats and self._easycache_on_first_stage():
+            stats = it_cache.stats
+            logger.info(
+                "Wan2.2 IT residual cache: %s calc_entries=%d skip_entries=%d calc_forwards=%d skip_forwards=%d",
+                it_cache.describe(),
+                stats.calc_entries,
+                stats.skip_entries,
+                stats.calc_forwards,
+                stats.skip_forwards,
+            )
         if state is None or not config.log_stats:
             return
+        logger.info(
+            "Wan2.2 EasyCache prof: pp_rank=%d %s",
+            get_pipeline_parallel_rank(),
+            _format_ec_prof(),
+        )
         if self._safe_pipeline_parallel_world_size() > 1 and not is_pipeline_last_stage():
             return
         stats = state.stats
@@ -595,6 +875,7 @@ class WanEasyCacheMixin:
         """Release per-request histories and plans."""
         self._easycache_state = None
         self._easycache_step_plan = None
+        self._easycache_it_cache = None
 
     def predict_noise_maybe_with_easycache(
         self,
@@ -639,28 +920,34 @@ class WanEasyCacheMixin:
         timestep_value = 0.0 if timestep is None else timestep
         pp_size = self._safe_pipeline_parallel_world_size()
         decide_locally = pp_size == 1 or is_pipeline_last_stage()
-        step_plan = getattr(self, "_easycache_step_plan", None)
-        if step_plan is not None:
-            # Skip decisions for this step were precomputed in fixed patch order
-            # by plan_easycache_step() (required under Rotational PipeFusion,
-            # where stages iterate patches in different rotated orders).
-            should_skip = bool(step_plan.get(patch_id, False))
-        else:
-            should_skip = False
-            if decide_locally:
-                should_skip = state.should_skip_pair(
-                    pair_key=pair_key,
-                    raw_input=raw_input,
-                    timestep_value=timestep_value,
-                    step_idx=step_idx,
-                    do_true_cfg=do_true_cfg,
-                )
-            if pp_size > 1:
-                skip_flag = torch.zeros(1, dtype=torch.int32, device=self.device)
+        with _ec_span("predict_prep"):
+            step_plan = getattr(self, "_easycache_step_plan", None)
+            if step_plan is not None:
+                # Skip decisions for this step were precomputed in fixed patch order
+                # by plan_easycache_step() (required under Rotational PipeFusion,
+                # where stages iterate patches in different rotated orders).
+                should_skip = bool(step_plan.get(patch_id, False))
+            else:
+                should_skip = False
                 if decide_locally:
-                    skip_flag[0] = int(should_skip)
-                get_pp_group().broadcast(skip_flag, src=pp_size - 1)
-                should_skip = bool(skip_flag.item())
+                    should_skip = state.should_skip_pair(
+                        pair_key=pair_key,
+                        raw_input=raw_input,
+                        timestep_value=timestep_value,
+                        step_idx=step_idx,
+                        do_true_cfg=do_true_cfg,
+                    )
+                # Outside the async patch loop `step_plan` is unset, so the flag
+                # is re-decided per call. Inside the protected region the last
+                # stage's answer is a data-free calc, which every rank already
+                # holds (the non-last stages default to calc) -- no handshake.
+                guaranteed_calc = step_idx < state.warmup_steps or step_idx >= state.num_steps - FINAL_FULL_STEPS
+                if pp_size > 1 and not guaranteed_calc:
+                    skip_flag = torch.zeros(1, dtype=torch.int32, device=self.device)
+                    if decide_locally:
+                        skip_flag[0] = int(should_skip)
+                    get_pp_group().broadcast(skip_flag, src=pp_size - 1)
+                    should_skip = bool(skip_flag.item())
 
         if should_skip:
             self._easycache_last_call_skipped = True
@@ -689,6 +976,20 @@ class WanEasyCacheMixin:
             return positive_noise_pred
 
         if pp_size > 1:
+            # Attach the first-stage intermediate-tensor cache to the full-compute
+            # path. This is orthogonal to the pipeline-wide skip above: even when
+            # the whole (step, patch) runs, the *first* stage may still elide its
+            # own block stack and predict the intermediate tensor. Because it
+            # still returns an IntermediateTensors, the isend still happens, so
+            # this needs no cross-rank coordination and unbalances no FIFO.
+            positive_kwargs, negative_kwargs = self._attach_it_residual_cache(
+                positive_kwargs=positive_kwargs,
+                negative_kwargs=negative_kwargs,
+                transformer_id=transformer_id,
+                patch_id=patch_id,
+                step_idx=step_idx,
+                do_true_cfg=do_true_cfg,
+            )
             result = self.predict_noise_maybe_with_cfg(
                 do_true_cfg=do_true_cfg,
                 true_cfg_scale=true_cfg_scale,

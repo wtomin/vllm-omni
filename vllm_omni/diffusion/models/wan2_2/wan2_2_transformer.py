@@ -3,7 +3,7 @@
 
 import math
 from collections.abc import Iterable
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import torch
 import torch.nn as nn
@@ -52,7 +52,43 @@ from vllm_omni.diffusion.layers.rope import RotaryEmbeddingWan
 from vllm_omni.platforms import current_omni_platform
 from vllm_omni.quantization.mxfp4_config import NPUMxfp4LinearMethod
 
+if TYPE_CHECKING:
+    pass
+
 logger = init_logger(__name__)
+
+
+class ITResidualCacheProtocol(Protocol):
+    """The subset of :class:`ITResidualCache` that the transformer calls.
+
+    Declared structurally so the transformer does not import the cache module at
+    runtime and the two can be tested independently.
+    """
+
+    def should_skip(self, *, key: tuple[str, int, str], block_input: torch.Tensor, protected: bool) -> bool: ...
+
+    def predict(self, *, key: tuple[str, int, str], block_input: torch.Tensor) -> torch.Tensor: ...
+
+    def update(self, *, key: tuple[str, int, str], block_input: torch.Tensor, block_output: torch.Tensor) -> None: ...
+
+
+def _predict_first_stage_intermediate(
+    block_input: torch.Tensor,
+    *,
+    cache: ITResidualCacheProtocol | None,
+    key: tuple[str, int, str] | None,
+    protected: bool,
+) -> IntermediateTensors | None:
+    """Predict this stage's intermediate tensor, or return None to run the blocks.
+
+    Only the first stage calls this. A hit still returns an ``IntermediateTensors``,
+    so the send to the next stage is unchanged.
+    """
+    if cache is None or key is None:
+        return None
+    if not cache.should_skip(key=key, block_input=block_input, protected=protected):
+        return None
+    return IntermediateTensors({"hidden_states": cache.predict(key=key, block_input=block_input)})
 
 
 class DistributedRMSNorm(nn.Module):
@@ -1100,6 +1136,9 @@ class WanTransformer3DModel(nn.Module, PipeFusionTransformerMixin):
         encoder_hidden_states: torch.Tensor,
         encoder_hidden_states_image: torch.Tensor | None = None,
         intermediate_tensors: IntermediateTensors | None = None,
+        it_residual_cache: "ITResidualCacheProtocol | None" = None,
+        it_residual_key: tuple[str, int, str] | None = None,
+        it_residual_protected: bool = False,
         return_dict: bool = True,
         attention_kwargs: dict[str, Any] | None = None,
         dims: tuple[int, int, int, int, int] | None = None,
@@ -1117,6 +1156,21 @@ class WanTransformer3DModel(nn.Module, PipeFusionTransformerMixin):
             hidden_states = self.patch_embedding(hidden_states)
             hidden_states = hidden_states.flatten(2).transpose(1, 2)
             hidden_states = self._sp_shard_point(hidden_states)
+            # First-stage block-stack elision. ``hidden_states`` here is exactly
+            # the block input, and the blocks preserve that shape, so
+            # ``x + (blocks(x) - x)`` is a well-formed intermediate tensor.
+            # Return it before RoPE and the condition embedder: those exist only
+            # to feed the blocks, and the isend still carries the same tensor
+            # the next stage would have received from a full compute. The
+            # decision stays on this rank, so no peer has to be told.
+            predicted = _predict_first_stage_intermediate(
+                hidden_states,
+                cache=it_residual_cache,
+                key=it_residual_key,
+                protected=it_residual_protected,
+            )
+            if predicted is not None:
+                return predicted
         else:
             if intermediate_tensors is None:
                 raise RuntimeError("intermediate_tensors must be provided for non-first PP stages")
@@ -1181,6 +1235,7 @@ class WanTransformer3DModel(nn.Module, PipeFusionTransformerMixin):
         # Preserve the post-patch (T, H, W) grid so VSA can partition
         # the flattened DiT sequence into spatiotemporal blocks.
         vsa_dit_seq_shape = (post_patch_num_frames, post_patch_height, post_patch_width)
+        block_input = hidden_states if (it_residual_cache is not None and is_pipeline_first_stage()) else None
         for block in self.blocks[self.start_layer : self.end_layer]:
             hidden_states = block(
                 hidden_states,
@@ -1193,6 +1248,8 @@ class WanTransformer3DModel(nn.Module, PipeFusionTransformerMixin):
             )
 
         if not is_pipeline_last_stage():
+            if block_input is not None and it_residual_key is not None:
+                it_residual_cache.update(key=it_residual_key, block_input=block_input, block_output=hidden_states)
             # Non-last PP stage: hand the token sequence to the caller via IntermediateTensors.
             # predict_noise will broadcast it to the next stage before calling that stage's forward.
             return IntermediateTensors({"hidden_states": hidden_states})

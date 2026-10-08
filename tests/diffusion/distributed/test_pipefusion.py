@@ -144,6 +144,46 @@ class TestPipeFusionRuntime:
         assert runtime.pp_patches_token_num == [12, 18]
         assert runtime.pp_patches_token_start_end_idx == [(0, 12), (12, 30)]
 
+    def test_num_patch_env_override_decouples_from_world_size(self, monkeypatch):
+        monkeypatch.setattr(pf_runtime, "get_pipeline_parallel_world_size", lambda: 2)
+        monkeypatch.setenv("VLLM_OMNI_PF_NUM_PATCH", "4")
+        assert PipeFusionRuntime.resolve_num_pipeline_patch() == 4
+
+        runtime = PipeFusionRuntime()
+        runtime.patch_size = (1, 2, 2)
+        runtime.split_dim = "temporal"
+        runtime._calc_patches_metadata(torch.zeros(1, 4, 8, 6, 4))
+
+        assert runtime.num_pipeline_patch == 4
+        # ppf = 8 post-patch frames -> even 2/2/2/2 split, remainder stays on the last patch.
+        assert runtime.pp_patches_post_frames == [2, 2, 2, 2]
+        assert runtime.pp_patches_height == [2, 2, 2, 2]
+
+        monkeypatch.delenv("VLLM_OMNI_PF_NUM_PATCH")
+        assert PipeFusionRuntime.resolve_num_pipeline_patch() == 2
+
+    def test_num_patch_env_override_rejects_bad_values(self, monkeypatch):
+        monkeypatch.setattr(pf_runtime, "get_pipeline_parallel_world_size", lambda: 2)
+        monkeypatch.setenv("VLLM_OMNI_PF_NUM_PATCH", "0")
+        with pytest.raises(ValueError, match="VLLM_OMNI_PF_NUM_PATCH"):
+            PipeFusionRuntime.resolve_num_pipeline_patch()
+
+        monkeypatch.setenv("VLLM_OMNI_PF_NUM_PATCH", "abc")
+        with pytest.raises(ValueError, match="VLLM_OMNI_PF_NUM_PATCH"):
+            PipeFusionRuntime.resolve_num_pipeline_patch()
+
+        monkeypatch.setenv("VLLM_OMNI_PF_NUM_PATCH", "3")
+        runtime = PipeFusionRuntime()
+        runtime.patch_size = (1, 2, 2)
+        runtime.split_dim = "temporal"
+        # ppf = 8 over 3 patches: remainder goes to the last patch, no empty patch.
+        runtime._calc_patches_metadata(torch.zeros(1, 4, 8, 6, 4))
+        assert runtime.pp_patches_post_frames == [2, 2, 4]
+
+        monkeypatch.setenv("VLLM_OMNI_PF_NUM_PATCH", "16")
+        with pytest.raises(ValueError, match="cannot split"):
+            runtime._calc_patches_metadata(torch.zeros(1, 4, 8, 6, 4))
+
     def test_next_patch_wraps_only_in_patch_mode(self):
         runtime = PipeFusionRuntime()
         runtime.num_pipeline_patch = 3

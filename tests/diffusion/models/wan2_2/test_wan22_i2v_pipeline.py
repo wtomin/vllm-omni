@@ -10,7 +10,13 @@ from PIL import Image
 from torch import nn
 
 from tests.diffusion.models.wan2_2.conftest import StubScheduler, StubTransformer, StubVAE, noop_progress_bar
-from vllm_omni.diffusion.models.wan2_2.easycache import WanEasyCacheState
+from vllm_omni.diffusion.models.wan2_2.easycache import (
+    FINAL_FULL_STEPS,
+    WanEasyCacheConfig,
+    WanEasyCacheState,
+    rotational_comm_unsafe_patches,
+    rotational_nonlast_predicted_patches,
+)
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2 import _WAN_TEXT_ENCODER_OFFLOAD_PLAN, build_wan_scheduler
 from vllm_omni.diffusion.models.wan2_2.pipeline_wan2_2_i2v import (
     Wan22I2VPipeline,
@@ -345,6 +351,173 @@ def test_i2v_easycache_warmup_covers_pipefusion_warmup(monkeypatch) -> None:
     )
 
     assert pipeline._easycache_state.warmup_steps == 5
+
+
+def _async_entered_patches(*, pp_size: int, num_patch: int, step_i: int, num_async_steps: int) -> set[int]:
+    """Patches a non-last stage really calls predict() for.
+
+    Independent mirror of ``PipeFusionPipelineMixin._async_pipeline``: rotation
+    seeds each rank's order with ``get_initial_patch_indices()`` and rolls it
+    right once per step; ``skip_patch`` drops that rank's own last position, and
+    the final async step truncates positions ``>= rank + 1``.
+    """
+    if step_i <= 0:
+        return set(range(num_patch))
+    entered: set[int] = set()
+    for rank in range(pp_size - 1):
+        order = list(range(num_patch))
+        shift = rank % num_patch
+        order = order[-shift:] + order[:-shift]
+        for _ in range(step_i - 1):
+            order = order[-1:] + order[:-1]
+        for ip, pidx in enumerate(order):
+            skip_patch = ip == num_patch - 1 or (step_i == num_async_steps - 1 and ip >= rank + 1)
+            if not skip_patch:
+                entered.add(pidx)
+    return entered
+
+
+def _last_stage_anchor(*, pp_size: int, num_patch: int, step_i: int) -> int:
+    """``get_last_stage_patch_indices(step_i - 1)[-1]`` for the same config."""
+    order = list(range(num_patch))
+    shift = (pp_size - 1) % num_patch
+    order = order[-shift:] + order[:-shift]
+    for _ in range(step_i - 1):
+        order = order[-1:] + order[:-1]
+    return order[-1]
+
+
+@pytest.mark.parametrize("pp_size,num_patch", [(2, 2), (2, 3), (2, 4), (3, 6), (4, 4), (4, 8)])
+@pytest.mark.parametrize("step_i", [0, 1, 2, 7, 44])
+def test_rotational_predicted_patches_supersets_every_entered_patch(pp_size: int, num_patch: int, step_i: int) -> None:
+    # The plan handshake is dropped whenever this set is a subset of the patches
+    # the last stage is forced to compute, so an under-report here would let a
+    # rank keep sending into a channel its peer decided not to receive on.
+    entered = _async_entered_patches(pp_size=pp_size, num_patch=num_patch, step_i=step_i, num_async_steps=45)
+    predicted = rotational_nonlast_predicted_patches(pp_size=pp_size, num_patch=num_patch, step_i=step_i)
+    assert entered <= predicted, f"pp={pp_size} N={num_patch} step_i={step_i}: {sorted(entered - predicted)}"
+
+
+@pytest.mark.parametrize("pp_size,num_patch", [(2, 2), (2, 4), (4, 4), (4, 8)])
+def test_plan_handshake_elision_never_hides_a_skippable_patch(pp_size: int, num_patch: int) -> None:
+    """The plan broadcast may only be dropped for patches the last stage cannot skip.
+
+    ``plan_easycache_step`` elides the handshake when every patch a non-last
+    stage may enter is a proven calc on the last stage: inside the protected
+    region ``should_skip_pair`` never returns True, and the anchor and
+    comm-unsafe patches are rolled back to calc. Any other patch stays
+    skippable and must still be broadcast.
+    """
+    num_steps, pipefusion_warmup, easycache_warmup = 50, 5, 7
+    num_async = num_steps - pipefusion_warmup
+    for step_i in range(num_async):
+        step_idx = pipefusion_warmup + step_i
+        guaranteed = (
+            set(range(num_patch)) if step_idx < easycache_warmup or step_idx >= num_steps - FINAL_FULL_STEPS else set()
+        )
+        if step_i > 0:
+            guaranteed.add(_last_stage_anchor(pp_size=pp_size, num_patch=num_patch, step_i=step_i))
+            guaranteed |= rotational_comm_unsafe_patches(
+                pp_size=pp_size, num_patch=num_patch, num_async_steps=num_async, step_i=step_i
+            )
+        predicted = rotational_nonlast_predicted_patches(pp_size=pp_size, num_patch=num_patch, step_i=step_i)
+        if predicted <= guaranteed:
+            entered = _async_entered_patches(
+                pp_size=pp_size, num_patch=num_patch, step_i=step_i, num_async_steps=num_async
+            )
+            assert entered <= guaranteed, (
+                f"pp={pp_size} N={num_patch} step_i={step_i}: elides while {sorted(entered - guaranteed)} "
+                "could still be skipped by the last stage"
+            )
+
+
+@pytest.mark.parametrize("pp_size,num_patch", [(2, 2), (2, 4), (4, 4), (4, 8)])
+def test_anchor_force_off_never_elides_the_handshake(pp_size: int, num_patch: int) -> None:
+    """With the anchor force off, the anchor is genuinely skippable.
+
+    The elide proof is "every patch a non-last stage may run is a proven calc".
+    At pp=2/num_patch=2 the only patch the first stage runs is the anchor, so
+    dropping the anchor from ``guaranteed_calc`` must collapse the subset test
+    and restore the per-step broadcast -- otherwise the first stage would keep
+    its all-zero flags while the last stage skips the anchor, orphaning an
+    isend on that patch's comm-id.
+    """
+    num_steps, pipefusion_warmup, easycache_warmup = 50, 5, 7
+    num_async = num_steps - pipefusion_warmup
+    for step_i in range(1, num_async):
+        step_idx = pipefusion_warmup + step_i
+        protected = step_idx < easycache_warmup or step_idx >= num_steps - FINAL_FULL_STEPS
+        anchor = _last_stage_anchor(pp_size=pp_size, num_patch=num_patch, step_i=step_i)
+        unsafe = rotational_comm_unsafe_patches(
+            pp_size=pp_size, num_patch=num_patch, num_async_steps=num_async, step_i=step_i
+        )
+        predicted = rotational_nonlast_predicted_patches(pp_size=pp_size, num_patch=num_patch, step_i=step_i)
+        base = set(range(num_patch)) if protected else set()
+        entered = _async_entered_patches(pp_size=pp_size, num_patch=num_patch, step_i=step_i, num_async_steps=num_async)
+
+        on = base | {anchor} | unsafe
+        off = base | unsafe
+        # Dropping the anchor force only ever removes proven-calc entries, so it
+        # can turn the elide off but must never turn it on where it was unsafe.
+        assert not (predicted <= off) or predicted <= on
+        if predicted <= off and not protected:
+            assert entered <= off, (
+                f"pp={pp_size} N={num_patch} step_i={step_i}: elides with the anchor force off "
+                f"while {sorted(entered - off)} could still be skipped"
+            )
+
+
+def test_force_anchor_calc_defaults_on_and_is_overridable() -> None:
+    """The anchor force is opt-out: absent means forced (previous behaviour)."""
+    assert WanEasyCacheConfig().force_anchor_calc is True
+
+    pipeline = _make_i2v_pipeline(expand_timesteps=False)
+    params = SimpleNamespace(
+        extra_args={
+            "d2cache_enabled": True,
+            "d2cache_threshold": 0.05,
+            "d2cache_warmup_steps": 7,
+            "d2cache_epsilon": 1e-8,
+            "d2cache_log_stats": True,
+        }
+    )
+    config = pipeline._resolve_easycache_config([params])
+    assert config.force_anchor_calc is True
+
+    for falsy in (False, "false", "0", "no"):
+        params.extra_args["d2cache_force_anchor_calc"] = falsy
+        assert pipeline._resolve_easycache_config([params]).force_anchor_calc is False
+    for truthy in (True, "true", "1", "yes"):
+        params.extra_args["d2cache_force_anchor_calc"] = truthy
+        assert pipeline._resolve_easycache_config([params]).force_anchor_calc is True
+
+
+def test_it_residual_cache_is_off_until_requested_on_a_multi_stage_pipeline(monkeypatch) -> None:
+    pipeline = _make_i2v_pipeline(expand_timesteps=False)
+    params = SimpleNamespace(
+        extra_args={
+            "d2cache_enabled": True,
+            "it_residual_enabled": True,
+            "it_residual_threshold": 0.2,
+            "it_residual_second_order": True,
+        }
+    )
+    config = pipeline._resolve_easycache_config([params])
+    assert config.it_residual_enabled is True
+    assert config.it_residual_threshold == 0.2
+    assert config.it_residual_second_order is True
+    assert WanEasyCacheConfig().it_residual_enabled is False
+
+    pipeline._configure_easycache_for_request([params], num_steps=10)
+    assert pipeline._easycache_it_cache is None
+
+    monkeypatch.setattr(pipeline, "_safe_pipeline_parallel_world_size", lambda: 2)
+    pipeline._configure_easycache_for_request([params], num_steps=10)
+    cache = pipeline._easycache_it_cache
+    assert cache is not None
+    assert cache.threshold == 0.2
+    assert cache.second_order is True
+    assert cache.tensors_per_entry() == 3
 
 
 def test_i2v_prepare_latents_builds_expand_condition_and_first_frame_mask() -> None:
